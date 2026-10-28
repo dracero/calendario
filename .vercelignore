@@ -4,12 +4,10 @@
 .git/
 .gitignore
 *.log
-# Legacy standalone files (handled natively by Astro now)
-server.js
-src/lib/legacy-api-handler.js
-index.html
-app.js
-index.css
-user-sessions.json
-google-calendar-sync.json
-scheduled-meetings.json
+# Legacy standalone files (root only)
+/server.js
+/src/lib/legacy-api-handler.js
+/index.html
+/user-sessions.json
+/google-calendar-sync.json
+/scheduled-meetings.json
