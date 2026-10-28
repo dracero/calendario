@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "Clon completo de Calendly Meeting Types y sistema de reservas en vanilla HTML/CSS/JS",
   "type": "module",
-  "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js"

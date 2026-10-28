@@ -101,10 +101,17 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`🚀 Servidor de Reuniones activo en: http://127.0.0.1:${PORT}`);
-  console.log(`🔗 Calendly Meeting Types: http://127.0.0.1:${PORT}/app/scheduling/meeting_types/user/me`);
-  console.log(`🔐 Google Login Endpoint: http://127.0.0.1:${PORT}/api/auth/google`);
-  console.log(`📅 Google Calendar Feed: http://127.0.0.1:${PORT}/api/calendar/feed.ics`);
-  console.log(`☁️  Preparado para deploy en Vercel con api/index.js`);
-});
+// In local Node.js environments, listen on port. On Vercel, serverless handles requests.
+if (!process.env.VERCEL) {
+  server.listen(PORT, '127.0.0.1', () => {
+    console.log(`🚀 Servidor de Reuniones activo en: http://127.0.0.1:${PORT}`);
+    console.log(`🔗 Calendly Meeting Types: http://127.0.0.1:${PORT}/app/scheduling/meeting_types/user/me`);
+    console.log(`🔐 Google Login Endpoint: http://127.0.0.1:${PORT}/api/auth/google`);
+    console.log(`📅 Google Calendar Feed: http://127.0.0.1:${PORT}/api/calendar/feed.ics`);
+    console.log(`☁️  Preparado para deploy en Vercel con api/index.js`);
+  });
+}
+
+export default function handler(req, res) {
+  return server.emit('request', req, res);
+}

@@ -1,10 +1,5 @@
 {
   "version": 2,
-  "functions": {
-    "api/index.js": {
-      "includeFiles": "*.json"
-    }
-  },
   "rewrites": [
     {
       "source": "/api/(.*)",
@@ -19,27 +14,7 @@
       "destination": "/api/index.js"
     },
     {
-      "source": "/login",
-      "destination": "/index.html"
-    },
-    {
-      "source": "/app/(.*)",
-      "destination": "/index.html"
-    },
-    {
-      "source": "/app",
-      "destination": "/index.html"
-    },
-    {
-      "source": "/booking/(.*)",
-      "destination": "/index.html"
-    },
-    {
-      "source": "/booking",
-      "destination": "/index.html"
-    },
-    {
-      "source": "/user/(.*)",
+      "source": "/((?!api/|.*\\..*).*)",
       "destination": "/index.html"
     }
   ]

@@ -153,8 +153,12 @@ function getAppBaseUrl(req) {
   if (process.env.APP_URL && !process.env.APP_URL.includes('localhost') && !process.env.APP_URL.includes('127.0.0.1')) {
     return process.env.APP_URL.replace(/\/$/, '');
   }
-  const host = req.headers['x-forwarded-host'] || req.headers.host;
-  const proto = req.headers['x-forwarded-proto'] || (host && host.includes('localhost') ? 'http' : 'https');
+  let host = req.headers['x-forwarded-host'] || req.headers.host || '';
+  if (host.includes(',')) host = host.split(',')[0].trim();
+
+  let proto = req.headers['x-forwarded-proto'] || (host && host.includes('localhost') ? 'http' : 'https');
+  if (proto.includes(',')) proto = proto.split(',')[0].trim();
+
   if (host) {
     return `${proto}://${host}`;
   }
@@ -421,10 +425,20 @@ function generateIcsFeed(meetings = []) {
 // VERCEL SERVERLESS HANDLER
 // =========================================================================
 export default async function handler(req, res) {
-  const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
-  const proto = req.headers['x-forwarded-proto'] || (host.includes('localhost') ? 'http' : 'https');
-  const parsedUrl = new URL(req.url, `${proto}://${host}`);
-  const pathname = parsedUrl.pathname;
+  try {
+    let host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
+    if (host.includes(',')) host = host.split(',')[0].trim();
+
+    let proto = req.headers['x-forwarded-proto'] || (host.includes('localhost') ? 'http' : 'https');
+    if (proto.includes(',')) proto = proto.split(',')[0].trim();
+
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(req.url || '/', `${proto}://${host}`);
+    } catch {
+      parsedUrl = new URL(req.url || '/', 'https://reuniones.local');
+    }
+    const pathname = parsedUrl.pathname;
 
   // Handle CORS Preflight
   if (req.method === 'OPTIONS') {
@@ -836,6 +850,13 @@ export default async function handler(req, res) {
     return;
   }
 
-  // Not found fallback for /api
-  sendJson(res, 404, { error: 'Ruta no encontrada', path: pathname });
+    // Not found fallback for /api
+    sendJson(res, 404, { error: 'Ruta no encontrada', path: pathname });
+  } catch (fatalErr) {
+    console.error('Fatal Serverless Error in handler:', fatalErr);
+    sendJson(res, 500, {
+      error: 'Error interno en función serverless',
+      message: fatalErr.message
+    });
+  }
 }
