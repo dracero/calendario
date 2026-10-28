@@ -97,7 +97,8 @@ export const ALL = async (context) => {
 
     const clientId = getEnv('GOOGLE_CLIENT_ID');
     const redirectUri = getRedirectUri(request);
-    const scopes = getEnv('GOOGLE_SCOPES') || 'openid email profile https://www.googleapis.com/auth/calendar.events';
+    const rawScopes = getEnv('GOOGLE_SCOPES') || 'openid email profile https://www.googleapis.com/auth/calendar.events';
+    const scopes = rawScopes.replace(/["']/g, '').trim().split(/\s+/).join(' ');
     const state = crypto.randomBytes(16).toString('hex');
 
     const authUrl = `${GOOGLE_AUTH_ENDPOINT}?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scopes)}&access_type=offline&prompt=consent%20select_account&state=${state}`;

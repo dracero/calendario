@@ -15,7 +15,11 @@ export const GOOGLE_USERINFO_ENDPOINT = 'https://www.googleapis.com/oauth2/v3/us
 // Solo process.env en runtime: evita que Vite incruste secretos del .env en el bundle.
 export function getEnv(key) {
   loadLocalEnv();
-  return process.env[key] || '';
+  let val = (process.env[key] || '').trim();
+  if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+    val = val.slice(1, -1).trim();
+  }
+  return val;
 }
 
 function loadLocalEnv() {
