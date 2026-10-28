@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import {
+  getEnv,
   getSessionUser,
   isGoogleConfigured,
   getAppBaseUrl,
@@ -75,7 +76,7 @@ export const ALL = async (context) => {
       authenticated: !!user,
       user: user || null,
       googleConfigured: configured,
-      googleClientId: configured ? process.env.GOOGLE_CLIENT_ID : null
+      googleClientId: configured ? getEnv('GOOGLE_CLIENT_ID') : null
     });
   }
 
@@ -94,9 +95,9 @@ export const ALL = async (context) => {
       return redirectResponse('/#login?error=missing_credentials');
     }
 
-    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientId = getEnv('GOOGLE_CLIENT_ID');
     const redirectUri = getRedirectUri(request);
-    const scopes = process.env.GOOGLE_SCOPES || 'openid email profile https://www.googleapis.com/auth/calendar.events';
+    const scopes = getEnv('GOOGLE_SCOPES') || 'openid email profile https://www.googleapis.com/auth/calendar.events';
     const state = crypto.randomBytes(16).toString('hex');
 
     const authUrl = `${GOOGLE_AUTH_ENDPOINT}?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scopes)}&access_type=offline&prompt=consent%20select_account&state=${state}`;
@@ -123,9 +124,10 @@ export const ALL = async (context) => {
     }
 
     try {
-      const clientId = process.env.GOOGLE_CLIENT_ID;
-      const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+      const clientId = getEnv('GOOGLE_CLIENT_ID');
+      const clientSecret = getEnv('GOOGLE_CLIENT_SECRET');
       const redirectUri = getRedirectUri(request);
+
 
       const tokenResponse = await fetch(GOOGLE_TOKEN_ENDPOINT, {
         method: 'POST',

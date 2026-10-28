@@ -12,9 +12,41 @@ export const GOOGLE_AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/aut
 export const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 export const GOOGLE_USERINFO_ENDPOINT = 'https://www.googleapis.com/oauth2/v3/userinfo';
 
-export function getSecret() {
-  return process.env.SESSION_SECRET || 'reuniones_super_secret_jwt_key_2026_change_in_production';
+export function getEnv(key) {
+  loadLocalEnv();
+  return process.env[key] || (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env[key]) || '';
 }
+
+function loadLocalEnv() {
+  try {
+    const envPath = path.resolve(process.cwd(), '.env');
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, 'utf-8');
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const eqIdx = trimmed.indexOf('=');
+        if (eqIdx !== -1) {
+          const key = trimmed.slice(0, eqIdx).trim();
+          let val = trimmed.slice(eqIdx + 1).trim();
+          if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+            val = val.slice(1, -1);
+          }
+          if (process.env[key] === undefined) {
+            process.env[key] = val;
+          }
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function getSecret() {
+  return getEnv('SESSION_SECRET') || 'reuniones_super_secret_jwt_key_2026_change_in_production';
+}
+
 
 export function signSession(data) {
   const secret = getSecret();
@@ -68,8 +100,8 @@ export function getSessionUser(request) {
 }
 
 export function isGoogleConfigured() {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const clientId = getEnv('GOOGLE_CLIENT_ID');
+  const clientSecret = getEnv('GOOGLE_CLIENT_SECRET');
   return !!(
     clientId &&
     clientSecret &&
@@ -80,8 +112,9 @@ export function isGoogleConfigured() {
 }
 
 export function getAppBaseUrl(request) {
-  if (process.env.APP_URL && !process.env.APP_URL.includes('localhost') && !process.env.APP_URL.includes('127.0.0.1')) {
-    return process.env.APP_URL.replace(/\/$/, '');
+  const appUrl = getEnv('APP_URL');
+  if (appUrl && !appUrl.includes('localhost') && !appUrl.includes('127.0.0.1')) {
+    return appUrl.replace(/\/$/, '');
   }
   let host = request.headers.get('x-forwarded-host') || request.headers.get('host') || '';
   if (host.includes(',')) host = host.split(',')[0].trim();
@@ -92,19 +125,22 @@ export function getAppBaseUrl(request) {
   if (host) {
     return `${proto}://${host}`;
   }
-  if (process.env.VERCEL_URL) {
-    return `https://${process.env.VERCEL_URL}`;
+  const vercelUrl = getEnv('VERCEL_URL');
+  if (vercelUrl) {
+    return `https://${vercelUrl}`;
   }
   return 'http://localhost:4321';
 }
 
 export function getRedirectUri(request) {
-  if (process.env.GOOGLE_REDIRECT_URI && !process.env.GOOGLE_REDIRECT_URI.includes('localhost')) {
-    return process.env.GOOGLE_REDIRECT_URI;
+  const customRedirect = getEnv('GOOGLE_REDIRECT_URI');
+  if (customRedirect && !customRedirect.includes('localhost')) {
+    return customRedirect;
   }
   const baseUrl = getAppBaseUrl(request);
   return `${baseUrl}/api/auth/google/callback`;
 }
+
 
 export function loadSyncConfig() {
   try {
