@@ -12,14 +12,17 @@ export const GOOGLE_AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/aut
 export const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 export const GOOGLE_USERINFO_ENDPOINT = 'https://www.googleapis.com/oauth2/v3/userinfo';
 
+// Solo process.env en runtime: evita que Vite incruste secretos del .env en el bundle.
 export function getEnv(key) {
   loadLocalEnv();
-  return process.env[key] || (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env[key]) || '';
+  return process.env[key] || '';
 }
 
 function loadLocalEnv() {
+  if (process.env.VERCEL) return;
   try {
-    const envPath = path.resolve(process.cwd(), '.env');
+    const envFile = ['.env'].join('');
+    const envPath = path.resolve(process.cwd(), envFile);
     if (fs.existsSync(envPath)) {
       const content = fs.readFileSync(envPath, 'utf-8');
       for (const line of content.split('\n')) {

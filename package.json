@@ -18,8 +18,11 @@
   ],
   "author": "Antigravity",
   "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "dependencies": {
-    "@astrojs/vercel": "^11.0.17",
-    "astro": "^7.4.3"
+    "@astrojs/vercel": "^9.0.5",
+    "astro": "^5.18.1"
   }
 }
