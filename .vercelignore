@@ -1,0 +1,6 @@
+.env
+.env.local
+.git/
+.gitignore
+*.log
+user-sessions.json

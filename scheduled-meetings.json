@@ -1,0 +1,47 @@
+[
+  {
+    "id": "meet-1",
+    "eventTypeId": "ev-1",
+    "eventTitle": "Reunión de 15 minutos",
+    "eventColor": "#006bff",
+    "duration": 15,
+    "location": "Google Meet",
+    "locationUrl": "https://meet.google.com/abc-defg-hij",
+    "inviteeName": "Sofía Valenzuela",
+    "inviteeEmail": "sofia.valenzuela@empresa.com",
+    "inviteePhone": "+56 9 8765 4321",
+    "inviteeNotes": "Coordinación sobre entrega de la fase 2 y dudas de API.",
+    "dateTime": "2026-10-27T10:30:00",
+    "status": "upcoming"
+  },
+  {
+    "id": "meet-2",
+    "eventTypeId": "ev-2",
+    "eventTitle": "Llamada de Descubrimiento & Estrategia",
+    "eventColor": "#10b981",
+    "duration": 30,
+    "location": "Google Meet",
+    "locationUrl": "https://meet.google.com/klm-nopq-rst",
+    "inviteeName": "Roberto Morales",
+    "inviteeEmail": "roberto@startup.io",
+    "inviteePhone": "+56 9 1234 5678",
+    "inviteeNotes": "Interesados en integrar el sistema en nuestro portal de ventas.",
+    "dateTime": "2026-10-29T15:00:00",
+    "status": "upcoming"
+  },
+  {
+    "id": "meet-3",
+    "eventTypeId": "ev-3",
+    "eventTitle": "Demo de Producto / Showcase",
+    "eventColor": "#8b5cf6",
+    "duration": 45,
+    "location": "Zoom",
+    "locationUrl": "https://zoom.us/j/1234567890",
+    "inviteeName": "Mariana Costa",
+    "inviteeEmail": "mariana.costa@tech.org",
+    "inviteePhone": "+54 11 4455 6677",
+    "inviteeNotes": "Revisión final de métricas y onboarding del equipo.",
+    "dateTime": "2026-10-25T11:00:00",
+    "status": "past"
+  }
+]

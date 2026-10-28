@@ -1,0 +1,1415 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reuniones | Gestión de Tipos de Reunión & Reservas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/index.css">
+</head>
+<body>
+
+  <!-- App Header -->
+  <header class="app-header">
+    <div class="header-container">
+      <div class="brand-wrapper" id="brand-home-btn">
+        <div class="brand-logo-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="18" rx="3" ry="3"></rect>
+            <line x1="16" y1="2" x2="16" y2="6"></line>
+            <line x1="8" y1="2" x2="8" y2="6"></line>
+            <line x1="3" y1="10" x2="21" y2="10"></line>
+            <circle cx="8" cy="14" r="1.5" fill="currentColor"></circle>
+            <circle cx="12" cy="14" r="1.5" fill="currentColor"></circle>
+            <circle cx="16" cy="14" r="1.5" fill="currentColor"></circle>
+            <circle cx="8" cy="18" r="1.5" fill="currentColor"></circle>
+            <circle cx="12" cy="18" r="1.5" fill="currentColor"></circle>
+          </svg>
+        </div>
+        <div class="brand-text">
+          Reuniones <span class="brand-badge">PRO</span>
+        </div>
+      </div>
+
+      <!-- Navigation Tabs -->
+      <nav class="header-nav">
+        <button class="nav-tab-btn active" data-view="event-types">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7"></rect>
+            <rect x="14" y="3" width="7" height="7"></rect>
+            <rect x="14" y="14" width="7" height="7"></rect>
+            <rect x="3" y="14" width="7" height="7"></rect>
+          </svg>
+          Tipos de eventos
+        </button>
+        <button class="nav-tab-btn" data-view="scheduled-events">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+            <circle cx="9" cy="7" r="4"></circle>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+          </svg>
+          Reuniones programadas
+          <span class="tab-badge" id="scheduled-counter-badge">2</span>
+        </button>
+        <button class="nav-tab-btn" data-view="availability">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="12 6 12 12 16 14"></polyline>
+          </svg>
+          Disponibilidad
+        </button>
+        <button class="nav-tab-btn" data-view="workflows">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+          </svg>
+          Flujos de trabajo
+        </button>
+      </nav>
+
+      <!-- Right Header Actions -->
+      <div class="header-actions">
+        <button class="theme-toggle-btn" id="theme-toggle-btn" title="Alternar tema oscuro / claro">
+          <svg class="sun-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="5"></circle>
+            <line x1="12" y1="1" x2="12" y2="3"></line>
+            <line x1="12" y1="21" x2="12" y2="23"></line>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+            <line x1="1" y1="12" x2="3" y2="12"></line>
+            <line x1="21" y1="12" x2="23" y2="12"></line>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+          </svg>
+        </button>
+
+        <!-- Google Calendar Integration Button -->
+        <button class="header-gcal-btn" id="btn-open-google-cal-modal" title="Conectar o administrar Google Calendar">
+          <svg class="gcal-icon-svg" width="16" height="16" viewBox="0 0 24 24">
+            <path fill="#4285F4" d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11z"/>
+            <path fill="#34A853" d="M7 10h5v5H7z"/>
+            <path fill="#FBBC05" d="M12 10h5v5h-5z"/>
+            <path fill="#EA4335" d="M7 15h5v4H7z"/>
+          </svg>
+          <span class="header-gcal-text">Google Calendar</span>
+          <span class="header-gcal-status disconnected" id="header-gcal-badge">Conectar</span>
+        </button>
+
+        <button class="btn-public-preview" id="btn-public-landing-view">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <line x1="10" y1="14" x2="21" y2="3"></line>
+          </svg>
+          Ver página pública
+        </button>
+
+        <div class="user-profile-container">
+          <button class="user-profile-btn" id="header-user-btn" title="Perfil de usuario">
+            <div class="user-avatar" id="header-user-avatar">AC</div>
+          </button>
+
+          <!-- User Profile Dropdown matching Calendly -->
+          <div class="user-profile-dropdown" id="user-profile-dropdown">
+            <div class="dropdown-user-header">
+              <div class="dropdown-user-avatar" id="dropdown-avatar">AC</div>
+              <div class="dropdown-user-details">
+                <div class="dropdown-user-name" id="dropdown-name">Alex Calendly</div>
+                <div class="dropdown-user-email" id="dropdown-email">alex.usuario@gmail.com</div>
+                <span class="dropdown-google-badge" id="dropdown-google-badge">
+                  <svg width="12" height="12" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+                  </svg>
+                  Google OAuth
+                </span>
+              </div>
+            </div>
+            <div class="dropdown-menu-list">
+              <button class="dropdown-menu-item" id="menu-item-my-meetings">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                  <line x1="16" y1="2" x2="16" y2="6"></line>
+                  <line x1="8" y1="2" x2="8" y2="6"></line>
+                  <line x1="3" y1="10" x2="21" y2="10"></line>
+                </svg>
+                Tipos de reunión (user/me)
+              </button>
+              <button class="dropdown-menu-item" id="menu-item-gcal">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+                </svg>
+                Ajustes Google Calendar
+              </button>
+              <button class="dropdown-menu-item" id="menu-item-env-setup">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 20h9"></path>
+                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                </svg>
+                Configuración .env de Google
+              </button>
+              <div class="dropdown-menu-divider"></div>
+              <button class="dropdown-menu-item logout-item" id="menu-item-logout">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                  <polyline points="16 17 21 12 16 7"></polyline>
+                  <line x1="21" y1="12" x2="9" y2="12"></line>
+                </svg>
+                Cerrar sesión
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- App Main Content -->
+  <main class="app-main">
+
+    <!-- VIEW 0: CALENDLY LOGIN / GOOGLE AUTH VIEW (CLON EXACTO) -->
+    <section id="view-login" class="app-view">
+      <div class="calendly-auth-screen">
+        <div class="calendly-auth-header">
+          <div class="calendly-auth-brand-logo">
+            <svg width="34" height="34" viewBox="0 0 32 32" fill="none">
+              <rect width="32" height="32" rx="8" fill="#006bff"/>
+              <circle cx="16" cy="16" r="8" fill="white" fill-opacity="0.2"/>
+              <path d="M16 10C12.6863 10 10 12.6863 10 16C10 19.3137 12.6863 22 16 22C18.8 22 21.1 20.1 21.8 17.5H19.5C18.9 18.9 17.6 19.8 16 19.8C13.9 19.8 12.2 18.1 12.2 16C12.2 13.9 13.9 12.2 16 12.2C17.6 12.2 18.9 13.1 19.5 14.5H21.8C21.1 11.9 18.8 10 16 10Z" fill="white"/>
+            </svg>
+            <span class="calendly-auth-brand-title">Calendly</span>
+          </div>
+        </div>
+
+        <!-- Dynamic Auth Alert Banner (shows .env status or error messages) -->
+        <div id="login-alert-banner" class="auth-alert-banner warning" style="display: none;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink: 0; margin-top: 1px;">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="8" x2="12" y2="12"></line>
+            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+          </svg>
+          <div id="login-alert-message" style="flex: 1;">
+            Configuración requerida en tu archivo <code>.env</code>.
+          </div>
+        </div>
+
+        <!-- Calendly Auth Card -->
+        <div class="calendly-auth-card">
+          <h2 class="calendly-auth-title">Inicia sesión en tu cuenta de Calendly</h2>
+
+          <form id="form-login-email" onsubmit="event.preventDefault();">
+            <div class="calendly-auth-group">
+              <label class="calendly-auth-label" for="login-input-email">Ingresa tu correo para comenzar.</label>
+              <input type="email" id="login-input-email" class="calendly-auth-input" placeholder="nombre@correo.com" required autocomplete="email">
+            </div>
+
+            <button type="submit" class="calendly-btn-continue" id="btn-login-continue">
+              Continuar
+            </button>
+          </form>
+
+          <div class="calendly-auth-divider">
+            <span>O</span>
+          </div>
+
+          <div class="calendly-social-stack">
+            <!-- Google Sign-in Button (REA Calendly Clone) -->
+            <button class="calendly-btn-google" id="btn-login-google" type="button" title="Iniciar sesión con Google OAuth 2.0">
+              <svg width="20" height="20" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+              </svg>
+              <span id="btn-login-google-text">Iniciar sesión con Google</span>
+            </button>
+
+            <!-- Microsoft Sign-in Button -->
+            <button class="calendly-btn-microsoft" id="btn-login-microsoft" type="button">
+              <svg width="18" height="18" viewBox="0 0 21 21">
+                <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+                <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+                <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+                <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+              </svg>
+              <span>Iniciar sesión con Microsoft</span>
+            </button>
+          </div>
+
+          <!-- Quick Demo Google Account Helper -->
+          <div class="calendly-demo-login-box">
+            <div class="calendly-demo-login-header">
+              <span>🚀 Modo Demo Instantáneo</span>
+              <button class="calendly-auth-link" id="btn-open-env-info" style="font-size: 0.75rem; background: none; border: none; cursor: pointer;">
+                Ver guía .env ↗
+              </button>
+            </div>
+            <p style="color: var(--text-secondary); margin: 0; line-height: 1.4;">
+              ¿Quieres probar todo el sistema de inmediato sin ingresar tus claves de Google Cloud?
+            </p>
+            <button type="button" class="calendly-btn-demo-quick" id="btn-login-demo">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+              </svg>
+              Entrar con Cuenta Google Demo (1-clic)
+            </button>
+          </div>
+
+          <!-- Bottom Link -->
+          <div class="calendly-auth-card-footer">
+            ¿No tienes una cuenta? <a href="#" id="link-login-signup" class="calendly-auth-link">Regístrate</a>.
+          </div>
+        </div>
+
+        <div class="calendly-auth-subfooter">
+          <button class="calendly-auth-lang-btn" id="btn-auth-lang">
+            <span>Español</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </button>
+          <span>•</span>
+          <span>Privacidad &amp; Seguridad</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 1: EVENT TYPES (CALENDLY MEETING TYPES VIEW) -->
+    <section id="view-event-types" class="app-view active">
+      <!-- User Banner / Header -->
+      <div class="user-context-banner">
+        <div class="user-context-left">
+          <div class="host-avatar-large" id="main-host-avatar">AC</div>
+          <div class="user-context-info">
+            <h1 id="main-host-name">Appointment Calendar</h1>
+            <div class="user-context-slug">
+              <span id="main-host-slug">reuniones.io/appointment-calendar</span>
+              <button class="link-copy-chip" id="btn-copy-main-link" title="Copiar enlace de mi página de reservas">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                Copiar enlace
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="banner-actions">
+          <div class="create-btn-container">
+            <button class="btn-primary" id="btn-create-event-type">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+              Crear
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </button>
+
+            <!-- Create Dropdown Menu -->
+            <div class="create-dropdown-menu" id="create-dropdown-menu">
+              <button class="create-menu-item" data-create-type="one-on-one">
+                <div class="create-icon-wrapper create-icon-one">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="12" cy="7" r="4"></circle>
+                  </svg>
+                </div>
+                <div class="create-menu-content">
+                  <span class="create-menu-title">Uno a uno</span>
+                  <span class="create-menu-desc">Reunión estándar entre tú y otra persona</span>
+                </div>
+              </button>
+
+              <button class="create-menu-item" data-create-type="group">
+                <div class="create-icon-wrapper create-icon-group">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="9" cy="7" r="4"></circle>
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                  </svg>
+                </div>
+                <div class="create-menu-content">
+                  <span class="create-menu-title">Grupal</span>
+                  <span class="create-menu-desc">Varios invitados se unen al mismo horario</span>
+                </div>
+              </button>
+
+              <button class="create-menu-item" data-create-type="collective">
+                <div class="create-icon-wrapper create-icon-collective">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="8" x2="12" y2="12"></line>
+                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                  </svg>
+                </div>
+                <div class="create-menu-content">
+                  <span class="create-menu-title">Colectivo</span>
+                  <span class="create-menu-desc">Tú y varios colegas participan juntos</span>
+                </div>
+              </button>
+
+              <button class="create-menu-item" data-create-type="round-robin">
+                <div class="create-icon-wrapper create-icon-round">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="23 4 23 10 17 10"></polyline>
+                    <polyline points="1 20 1 14 7 14"></polyline>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                  </svg>
+                </div>
+                <div class="create-menu-content">
+                  <span class="create-menu-title">Round Robin</span>
+                  <span class="create-menu-desc">Distribuye reservas rotativamente en tu equipo</span>
+                </div>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Controls & Filter Bar -->
+      <div class="controls-bar">
+        <div class="controls-left">
+          <div class="search-input-wrapper">
+            <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" id="filter-search-input" class="search-input" placeholder="Filtrar por nombre, duración o ubicación...">
+          </div>
+
+          <div class="filter-chips-group">
+            <button class="filter-chip active" data-filter="all">Todos (<span id="count-all">0</span>)</button>
+            <button class="filter-chip" data-filter="active">Activos (<span id="count-active">0</span>)</button>
+            <button class="filter-chip" data-filter="inactive">Inactivos (<span id="count-inactive">0</span>)</button>
+          </div>
+        </div>
+
+        <div class="controls-right">
+          <div class="view-mode-toggle">
+            <button class="view-btn active" id="view-mode-grid" title="Vista en tarjetas cuadrícula">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="7" height="7"></rect>
+                <rect x="14" y="3" width="7" height="7"></rect>
+                <rect x="14" y="14" width="7" height="7"></rect>
+                <rect x="3" y="14" width="7" height="7"></rect>
+              </svg>
+            </button>
+            <button class="view-btn" id="view-mode-list" title="Vista en lista">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="8" y1="6" x2="21" y2="6"></line>
+                <line x1="8" y1="12" x2="21" y2="12"></line>
+                <line x1="8" y1="18" x2="21" y2="18"></line>
+                <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                <line x1="3" y1="18" x2="3.01" y2="18"></line>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Event Types Cards Container -->
+      <div class="event-types-grid" id="event-types-container">
+        <!-- Rendered dynamically by app.js -->
+      </div>
+    </section>
+
+    <!-- VIEW 2: SCHEDULED EVENTS -->
+    <section id="view-scheduled-events" class="app-view" style="display: none;">
+      <div class="user-context-banner">
+        <div class="user-context-info">
+          <h1>Reuniones Programadas</h1>
+          <p class="form-hint">Consulta tus próximas citas con invitados, enlaces de videollamada y estados.</p>
+        </div>
+        <div class="filter-chips-group">
+          <button class="filter-chip active" data-scheduled-filter="upcoming">Próximas (<span id="scheduled-count-upcoming">2</span>)</button>
+          <button class="filter-chip" data-scheduled-filter="past">Pasadas (<span id="scheduled-count-past">1</span>)</button>
+          <button class="filter-chip" data-scheduled-filter="canceled">Canceladas (<span id="scheduled-count-canceled">0</span>)</button>
+        </div>
+      </div>
+
+      <div class="scheduled-meetings-container" id="scheduled-meetings-container">
+        <!-- Rendered dynamically by app.js -->
+      </div>
+    </section>
+
+    <!-- VIEW 3: AVAILABILITY -->
+    <section id="view-availability" class="app-view" style="display: none;">
+      <div class="user-context-banner">
+        <div class="user-context-info">
+          <h1>Disponibilidad y Horarios</h1>
+          <p class="form-hint">Configura tus horas de trabajo semanales, zonas horarias y tiempos de margen (búfer).</p>
+        </div>
+        <button class="btn-primary" id="btn-save-availability">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+            <polyline points="17 21 17 13 7 13 7 21"></polyline>
+            <polyline points="7 3 7 8 15 8"></polyline>
+          </svg>
+          Guardar cambios
+        </button>
+      </div>
+
+      <div class="modal-box" style="max-width: 800px; margin: 0 auto; box-shadow: var(--shadow-md);">
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">Zona horaria predeterminada</label>
+            <select id="setting-timezone" class="form-control">
+              <option value="America/Santiago">América / Santiago (GMT-3)</option>
+              <option value="America/Buenos_Aires">América / Buenos Aires (GMT-3)</option>
+              <option value="America/Bogota">América / Bogotá (GMT-5)</option>
+              <option value="America/Mexico_City">América / Ciudad de México (GMT-6)</option>
+              <option value="America/Lima">América / Lima (GMT-5)</option>
+              <option value="America/New_York">América / Nueva York (EDT/EST)</option>
+              <option value="Europe/Madrid">Europa / Madrid (CEST/CET)</option>
+            </select>
+          </div>
+
+          <h3 style="font-size: 1.05rem; font-weight: 700; margin: 24px 0 14px;">Horario Semanal Recurrente</h3>
+          <div id="weekly-schedule-rows" style="display: flex; flex-direction: column; gap: 12px;">
+            <!-- Rendered by JS -->
+          </div>
+
+          <h3 style="font-size: 1.05rem; font-weight: 700; margin: 30px 0 14px;">Límites de Reserva y Tiempos de Margen</h3>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <div class="form-group">
+              <label class="form-label">Tiempo de búfer antes del evento</label>
+              <select id="setting-buffer-before" class="form-control">
+                <option value="0">Sin búfer</option>
+                <option value="5">5 minutos antes</option>
+                <option value="10" selected>10 minutos antes</option>
+                <option value="15">15 minutos antes</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Tiempo de búfer después del evento</label>
+              <select id="setting-buffer-after" class="form-control">
+                <option value="0">Sin búfer</option>
+                <option value="5">5 minutos después</option>
+                <option value="10" selected>10 minutos después</option>
+                <option value="15">15 minutos después</option>
+              </select>
+            </div>
+          </div>
+
+          <h3 style="font-size: 1.05rem; font-weight: 700; margin: 30px 0 14px;">Calendarios Conectados & Sincronización</h3>
+          <div class="calendar-integration-card" id="avail-gcal-card">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
+              <div style="display: flex; align-items: center; gap: 14px;">
+                <div class="gcal-card-icon-box">
+                  <svg width="28" height="28" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11z"/>
+                    <path fill="#34A853" d="M7 10h5v5H7z"/>
+                    <path fill="#FBBC05" d="M12 10h5v5h-5z"/>
+                    <path fill="#EA4335" d="M7 15h5v4H7z"/>
+                  </svg>
+                </div>
+                <div>
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <strong style="font-size: 1rem;">Google Calendar</strong>
+                    <span class="status-pill-badge disconnected" id="avail-gcal-status-badge">Desconectado</span>
+                  </div>
+                  <div style="font-size: 0.8125rem; color: var(--text-muted); margin-top: 3px;" id="avail-gcal-desc">
+                    Vinculado a <a href="https://calendar.google.com/calendar/u/0/r" target="_blank" rel="noopener noreferrer" style="color: var(--primary); text-decoration: underline;">calendar.google.com/calendar/u/0/r</a>. Bloquea horarios ocupados automáticamente.
+                  </div>
+                </div>
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <button type="button" class="btn-secondary" id="btn-avail-open-gcal" style="font-size: 0.8125rem;">
+                  Abrir Calendar ↗
+                </button>
+                <button type="button" class="btn-primary" id="btn-avail-config-gcal" style="font-size: 0.8125rem;">
+                  Configurar sincronización
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 4: WORKFLOWS -->
+    <section id="view-workflows" class="app-view" style="display: none;">
+      <div class="user-context-banner">
+        <div class="user-context-info">
+          <h1>Flujos de Trabajo Automatizados</h1>
+          <p class="form-hint">Automatizaciones integradas de Calendly para recordatorios, confirmaciones y seguimiento.</p>
+        </div>
+      </div>
+
+      <div class="event-types-grid" style="grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));">
+        <div class="event-card">
+          <div class="card-top-accent" style="background: var(--primary);"></div>
+          <div class="card-body">
+            <h3 class="card-title">Confirmación inmediata por Email</h3>
+            <p class="card-description">Envía automáticamente un correo al invitado y anfitrión con el enlace de reunión y archivo de calendario .ics adjunto.</p>
+            <div class="card-meta-row">
+              <span class="meta-pill meta-pill-location">Disparador: Tras reservar</span>
+              <span class="meta-pill">Canal: Email</span>
+            </div>
+          </div>
+          <div class="card-footer">
+            <span class="form-hint">Estado del flujo</span>
+            <label class="toggle-switch">
+              <input type="checkbox" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="event-card">
+          <div class="card-top-accent" style="background: var(--accent-emerald);"></div>
+          <div class="card-body">
+            <h3 class="card-title">Recordatorio por Email 24h antes</h3>
+            <p class="card-description">Reduce los no-shows recordando la cita al invitado con 24 horas de antelación con botón para reprogramar si es necesario.</p>
+            <div class="card-meta-row">
+              <span class="meta-pill meta-pill-location">Disparador: 24h antes</span>
+              <span class="meta-pill">Canal: Email</span>
+            </div>
+          </div>
+          <div class="card-footer">
+            <span class="form-hint">Estado del flujo</span>
+            <label class="toggle-switch">
+              <input type="checkbox" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="event-card">
+          <div class="card-top-accent" style="background: var(--accent-amber);"></div>
+          <div class="card-body">
+            <h3 class="card-title">Recordatorio por SMS 1h antes</h3>
+            <p class="card-description">Mensaje de texto instantáneo al teléfono móvil del asistente con el link directo a la sala de videollamada.</p>
+            <div class="card-meta-row">
+              <span class="meta-pill meta-pill-location">Disparador: 1h antes</span>
+              <span class="meta-pill">Canal: SMS / WhatsApp</span>
+            </div>
+          </div>
+          <div class="card-footer">
+            <span class="form-hint">Estado del flujo</span>
+            <label class="toggle-switch">
+              <input type="checkbox" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="event-card">
+          <div class="card-top-accent" style="background: var(--accent-purple);"></div>
+          <div class="card-body">
+            <h3 class="card-title">Email de Seguimiento y Encuesta</h3>
+            <p class="card-description">Envía notas de la sesión, recursos mencionados y una breve encuesta de satisfacción al terminar la cita.</p>
+            <div class="card-meta-row">
+              <span class="meta-pill meta-pill-location">Disparador: 1h post-cita</span>
+              <span class="meta-pill">Canal: Email</span>
+            </div>
+          </div>
+          <div class="card-footer">
+            <span class="form-hint">Estado del flujo</span>
+            <label class="toggle-switch">
+              <input type="checkbox">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 5: PUBLIC PROFILE & BOOKING LANDING (STANDALONE PUBLIC PAGE) -->
+    <section id="view-public-landing" class="app-view public-landing-section" style="display: none;">
+      <!-- Public view top admin banner -->
+      <div class="public-preview-admin-banner">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span class="preview-eye-badge">👁️ VISTA PÚBLICA</span>
+          <span style="font-size: 0.8125rem; color: var(--text-secondary);">Así es como tus invitados y clientes ven tu página de reservas.</span>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button type="button" class="btn-secondary" id="btn-copy-public-page-url" style="font-size: 0.8125rem;">
+            Copiar enlace público
+          </button>
+          <button type="button" class="btn-primary" id="btn-return-to-admin" style="font-size: 0.8125rem;">
+            ← Volver al panel de control
+          </button>
+        </div>
+      </div>
+
+      <!-- Public Profile Header -->
+      <div class="public-profile-card">
+        <div class="public-avatar-circle" id="public-avatar-circle">AC</div>
+        <h1 class="public-profile-name" id="public-profile-name">Appointment Calendar</h1>
+        <p class="public-profile-bio" id="public-profile-bio">
+          Bienvenido a la página de programación de Appointment Calendar. Selecciona una de las sesiones disponibles a continuación para agendar un espacio en el calendario.
+        </p>
+        <div class="public-cal-connected-pill" id="public-cal-pill">
+          <svg width="14" height="14" viewBox="0 0 24 24">
+            <path fill="#4285F4" d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11z"/>
+            <path fill="#34A853" d="M7 10h5v5H7z"/>
+            <path fill="#FBBC05" d="M12 10h5v5h-5z"/>
+            <path fill="#EA4335" d="M7 15h5v4H7z"/>
+          </svg>
+          <span id="public-cal-pill-text">Disponibilidad sincronizada con Google Calendar</span>
+        </div>
+      </div>
+
+      <!-- Public Event Types List / Grid -->
+      <div class="public-events-container">
+        <h2 style="font-size: 1.15rem; font-weight: 700; margin-bottom: 16px; color: var(--text-main);">Tipos de reunión disponibles</h2>
+        <div class="public-events-list" id="public-events-list-container">
+          <!-- Rendered dynamically -->
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ===================================================================== -->
+  <!-- MODALS -->
+  <!-- ===================================================================== -->
+
+  <!-- MODAL: EVENT TYPE BUILDER / EDITOR -->
+  <div class="modal-overlay" id="modal-event-editor">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h2 class="modal-title" id="editor-modal-title">Nuevo Tipo de Evento</h2>
+        <button class="modal-close-btn" data-close-modal="modal-event-editor">&times;</button>
+      </div>
+
+      <div class="modal-nav-tabs" style="padding: 0 24px;">
+        <button class="modal-nav-tab active" data-editor-tab="basic">1. Detalles Básicos</button>
+        <button class="modal-nav-tab" data-editor-tab="schedule">2. Disponibilidad</button>
+        <button class="modal-nav-tab" data-editor-tab="questions">3. Preguntas al Invitado</button>
+      </div>
+
+      <div class="modal-body">
+        <form id="form-event-editor">
+          <input type="hidden" id="edit-event-id" value="">
+
+          <!-- TAB 1: BASIC DETAILS -->
+          <div id="tab-editor-basic" class="editor-tab-pane active">
+            <div class="form-group">
+              <label class="form-label" for="edit-name">Nombre del tipo de evento *</label>
+              <input type="text" id="edit-name" class="form-control" placeholder="Ej: Reunión de Descubrimiento de 30 min" required>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Color del evento</label>
+              <div class="color-swatches-grid" id="color-swatches-container">
+                <div class="color-swatch-item active" data-color="#006bff" style="background: #006bff;"></div>
+                <div class="color-swatch-item" data-color="#10b981" style="background: #10b981;"></div>
+                <div class="color-swatch-item" data-color="#8b5cf6" style="background: #8b5cf6;"></div>
+                <div class="color-swatch-item" data-color="#f59e0b" style="background: #f59e0b;"></div>
+                <div class="color-swatch-item" data-color="#f43f5e" style="background: #f43f5e;"></div>
+                <div class="color-swatch-item" data-color="#06b6d4" style="background: #06b6d4;"></div>
+                <div class="color-swatch-item" data-color="#6366f1" style="background: #6366f1;"></div>
+                <div class="color-swatch-item" data-color="#ec4899" style="background: #ec4899;"></div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="edit-location">Ubicación / Modalidad *</label>
+              <select id="edit-location" class="form-control">
+                <option value="Google Meet">Google Meet (Se genera enlace automático)</option>
+                <option value="Zoom">Zoom</option>
+                <option value="Microsoft Teams">Microsoft Teams</option>
+                <option value="Llamada telefónica">Llamada telefónica</option>
+                <option value="En persona">Reunión en persona</option>
+                <option value="Enlace personalizado">Enlace personalizado</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="edit-slug">Enlace personalizado (URL slug)</label>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 0.875rem; color: var(--text-muted);" id="edit-slug-prefix">reuniones.io/appointment-calendar/</span>
+                <input type="text" id="edit-slug" class="form-control" placeholder="reunion-30min" required>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="edit-description">Descripción / Instrucciones</label>
+              <textarea id="edit-description" class="form-control" rows="3" placeholder="Explica a los invitados de qué tratará la sesión..."></textarea>
+            </div>
+          </div>
+
+          <!-- TAB 2: SCHEDULE & DURATION -->
+          <div id="tab-editor-schedule" class="editor-tab-pane" style="display: none;">
+            <div class="form-group">
+              <label class="form-label">Duración del evento</label>
+              <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                <button type="button" class="btn-secondary duration-preset-btn active" data-duration="15">15 min</button>
+                <button type="button" class="btn-secondary duration-preset-btn" data-duration="30">30 min</button>
+                <button type="button" class="btn-secondary duration-preset-btn" data-duration="45">45 min</button>
+                <button type="button" class="btn-secondary duration-preset-btn" data-duration="60">60 min</button>
+              </div>
+              <input type="number" id="edit-duration" class="form-control" value="15" min="5" max="480">
+              <span class="form-hint">Especifique la duración en minutos</span>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Rango de fechas para reservar</label>
+              <select id="edit-date-range" class="form-control">
+                <option value="60">Próximos 60 días calendario</option>
+                <option value="30">Próximos 30 días calendario</option>
+                <option value="90">Próximos 90 días calendario</option>
+                <option value="indefinite">En el futuro de forma indefinida</option>
+              </select>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div class="form-group">
+                <label class="form-label">Búfer antes de la cita</label>
+                <select id="edit-buffer-before" class="form-control">
+                  <option value="0">0 minutos</option>
+                  <option value="5">5 minutos</option>
+                  <option value="10">10 minutos</option>
+                  <option value="15">15 minutos</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Búfer después de la cita</label>
+                <select id="edit-buffer-after" class="form-control">
+                  <option value="0">0 minutos</option>
+                  <option value="5">5 minutos</option>
+                  <option value="10">10 minutos</option>
+                  <option value="15">15 minutos</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- TAB 3: QUESTIONS -->
+          <div id="tab-editor-questions" class="editor-tab-pane" style="display: none;">
+            <p class="form-hint" style="margin-bottom: 16px;">Campos requeridos por defecto: Nombre y Correo electrónico.</p>
+            <div class="form-group">
+              <label class="form-label">Campos adicionales solicitados:</label>
+              <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 8px;">
+                <label style="display: flex; align-items: center; gap: 10px; font-size: 0.9375rem; cursor: pointer;">
+                  <input type="checkbox" id="edit-req-phone" checked>
+                  Solicitar número de teléfono móvil / WhatsApp
+                </label>
+                <label style="display: flex; align-items: center; gap: 10px; font-size: 0.9375rem; cursor: pointer;">
+                  <input type="checkbox" id="edit-req-notes" checked>
+                  Pregunta abierta: "¿De qué te gustaría hablar en la reunión?"
+                </label>
+                <label style="display: flex; align-items: center; gap: 10px; font-size: 0.9375rem; cursor: pointer;">
+                  <input type="checkbox" id="edit-req-guests">
+                  Permitir añadir correos de otros invitados asistentes
+                </label>
+              </div>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn-secondary" data-close-modal="modal-event-editor">Cancelar</button>
+        <button class="btn-primary" id="btn-save-event-type">Guardar y Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: SHARE (COMPARTIR TIPO DE EVENTO) -->
+  <div class="modal-overlay" id="modal-share">
+    <div class="modal-box" style="max-width: 620px;">
+      <div class="modal-header">
+        <h2 class="modal-title">Compartir tipo de evento</h2>
+        <button class="modal-close-btn" data-close-modal="modal-share">&times;</button>
+      </div>
+
+      <div class="modal-nav-tabs" style="padding: 0 24px;">
+        <button class="modal-nav-tab active" data-share-tab="permanent">Enlace permanente</button>
+        <button class="modal-nav-tab" data-share-tab="single-use">Enlace de un solo uso</button>
+        <button class="modal-nav-tab" data-share-tab="embed">Insertar en web</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Permanent Link Tab -->
+        <div id="tab-share-permanent" class="share-tab-pane active">
+          <p class="form-hint" style="margin-bottom: 12px;">Comparte este enlace para que cualquier persona pueda reservar según tu disponibilidad.</p>
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="share-link-input" class="form-control" readonly value="">
+            <button class="btn-primary" id="btn-copy-share-link">Copiar</button>
+          </div>
+        </div>
+
+        <!-- Single-use Link Tab -->
+        <div id="tab-share-single-use" class="share-tab-pane" style="display: none;">
+          <p class="form-hint" style="margin-bottom: 12px;">Este enlace se desactivará automáticamente después de que se concrete la primera reserva.</p>
+          <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+            <input type="text" id="single-use-link-input" class="form-control" readonly value="">
+            <button class="btn-primary" id="btn-copy-single-use">Copiar</button>
+          </div>
+          <button class="btn-secondary" id="btn-generate-new-single-use" style="font-size: 0.8125rem;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <polyline points="1 20 1 14 7 14"></polyline>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+            Generar nuevo enlace de un solo uso
+          </button>
+        </div>
+
+        <!-- Embed Tab -->
+        <div id="tab-share-embed" class="share-tab-pane" style="display: none;">
+          <p class="form-hint" style="margin-bottom: 12px;">Copia este código HTML para incrustar el widget de reservas directamente en tu sitio web.</p>
+          <textarea id="embed-code-textarea" class="form-control" rows="5" readonly style="font-family: monospace; font-size: 0.8125rem;"></textarea>
+          <div style="display: flex; justify-content: flex-end; margin-top: 10px;">
+            <button class="btn-primary" id="btn-copy-embed-code">Copiar código embed</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: PUBLIC BOOKING FLOW (CALENDLY CLIENT BOOKING INTERFACE) -->
+  <div class="modal-overlay" id="modal-public-booking">
+    <div class="modal-box" style="max-width: 960px; max-height: 94vh; padding: 0;">
+      <div style="position: absolute; top: 16px; right: 16px; z-index: 10;">
+        <button class="modal-close-btn" data-close-modal="modal-public-booking" style="background: var(--bg-card); box-shadow: var(--shadow-sm);">&times;</button>
+      </div>
+
+      <div class="booking-view-container" id="booking-container-inner">
+        <!-- Left: Host & Event Info -->
+        <div class="booking-left-col">
+          <div class="booking-host-profile">
+            <div class="booking-host-avatar" id="book-host-avatar">CE</div>
+            <div>
+              <div class="booking-host-name" id="book-host-name">Carlos Eduardo</div>
+              <div style="font-size: 0.8125rem; color: var(--text-muted);">Anfitrión</div>
+            </div>
+          </div>
+
+          <h2 class="booking-event-title" id="book-event-title">Reunión de 15 minutos</h2>
+
+          <div class="booking-meta-list">
+            <div class="booking-meta-item">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-muted);">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+              <span id="book-event-duration">15 minutos</span>
+            </div>
+            <div class="booking-meta-item">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-muted);">
+                <polygon points="23 7 16 12 23 17 23 7"></polygon>
+                <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+              </svg>
+              <span id="book-event-location">Google Meet (detalles tras reserva)</span>
+            </div>
+          </div>
+
+          <div class="booking-description-text" id="book-event-desc">
+            Agenda una llamada rápida para coordinar objetivos, preguntas o sincronización de proyectos.
+          </div>
+        </div>
+
+        <!-- Right: Step 1 (Calendar & Slots) -->
+        <div class="booking-right-col" id="booking-step-calendar">
+          <div class="booking-slots-layout">
+            <!-- Calendar Grid -->
+            <div>
+              <div class="calendar-header">
+                <h3 class="calendar-month-title" id="calendar-month-label">Octubre 2026</h3>
+                <div class="calendar-nav-buttons">
+                  <button class="cal-nav-btn" id="cal-prev-month" title="Mes anterior">&larr;</button>
+                  <button class="cal-nav-btn" id="cal-next-month" title="Mes siguiente">&rarr;</button>
+                </div>
+              </div>
+
+              <div class="calendar-grid" id="calendar-days-grid">
+                <!-- Days rendered dynamically -->
+              </div>
+
+              <div style="margin-top: 24px; font-size: 0.8125rem; color: var(--text-muted); display: flex; align-items: center; gap: 6px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="2" y1="12" x2="22" y2="12"></line>
+                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                </svg>
+                Zona horaria: <strong style="color: var(--text-secondary);" id="book-tz-label">Hora de Chile (GMT-3)</strong>
+              </div>
+            </div>
+
+            <!-- Slots column -->
+            <div class="slots-container" id="slots-container">
+              <div class="slots-header-date" id="selected-date-label">Selecciona un día</div>
+              <div class="time-slots-list" id="time-slots-list">
+                <p class="form-hint" style="text-align: center; margin-top: 30px;">Selecciona una fecha disponible en el calendario para ver los horarios.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Step 2 (Invitee Form) -->
+        <div class="booking-right-col" id="booking-step-form" style="display: none;">
+          <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 20px;">
+            <button class="cal-nav-btn" id="btn-back-to-calendar" title="Volver al calendario">&larr;</button>
+            <h3 style="font-size: 1.15rem; font-weight: 700;">Introduce tus datos</h3>
+          </div>
+
+          <div style="background: var(--bg-subtle); padding: 12px 16px; border-radius: var(--radius-md); margin-bottom: 20px; font-size: 0.875rem;">
+            <strong id="form-summary-datetime">Miércoles, 28 de Octubre, 10:30 - 10:45 AM</strong>
+          </div>
+
+          <form id="form-invitee-booking">
+            <div class="form-group">
+              <label class="form-label" for="invitee-name">Nombre completo *</label>
+              <input type="text" id="invitee-name" class="form-control" required placeholder="Tu nombre">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="invitee-email">Correo electrónico *</label>
+              <input type="email" id="invitee-email" class="form-control" required placeholder="nombre@correo.com">
+            </div>
+
+            <div class="form-group" id="group-invitee-phone">
+              <label class="form-label" for="invitee-phone">Número de teléfono móvil</label>
+              <input type="tel" id="invitee-phone" class="form-control" placeholder="+56 9 1234 5678">
+            </div>
+
+            <div class="form-group" id="group-invitee-notes">
+              <label class="form-label" for="invitee-notes">¿Qué te gustaría tratar en la reunión?</label>
+              <textarea id="invitee-notes" class="form-control" rows="3" placeholder="Comparte cualquier detalle que nos ayude a prepararnos..."></textarea>
+            </div>
+
+            <div style="margin-top: 24px;">
+              <button type="submit" class="btn-primary" style="width: 100%; justify-content: center; padding: 12px;">
+                Programar evento
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Right: Step 3 (Success Screen) -->
+        <div class="booking-right-col" id="booking-step-success" style="display: none; justify-content: center;">
+          <div class="booking-success-box">
+            <div class="success-icon-animated">
+              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+            </div>
+            <h2 style="font-size: 1.5rem; font-weight: 700; margin-bottom: 8px;">¡Estás programado!</h2>
+            <p style="font-size: 0.9375rem; color: var(--text-secondary); margin-bottom: 24px;">
+              Se ha enviado una invitación por correo con los detalles de la reunión a <strong id="success-invitee-email">tu correo</strong>.
+            </p>
+
+            <div style="background: var(--bg-subtle); border: 1px solid var(--border-light); border-radius: var(--radius-lg); padding: 18px 24px; text-align: left; width: 100%; margin-bottom: 24px;">
+              <div style="font-weight: 700; font-size: 1.05rem; margin-bottom: 8px;" id="success-event-title">Reunión de 15 minutos</div>
+              <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 6px; display: flex; align-items: center; gap: 8px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                  <line x1="16" y1="2" x2="16" y2="6"></line>
+                  <line x1="8" y1="2" x2="8" y2="6"></line>
+                  <line x1="3" y1="10" x2="21" y2="10"></line>
+                </svg>
+                <span id="success-datetime">Miércoles, 28 de Octubre, 10:30 AM</span>
+              </div>
+              <div style="font-size: 0.875rem; color: var(--text-secondary); display: flex; align-items: center; gap: 8px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="23 7 16 12 23 17 23 7"></polygon>
+                  <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                </svg>
+                <span id="success-location">Google Meet</span>
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-bottom: 12px;">
+              <a href="#" target="_blank" rel="noopener noreferrer" class="btn-secondary" id="btn-add-google-cal" style="display: inline-flex; align-items: center; gap: 6px; text-decoration: none;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M19.5 4H18V2.5a1 1 0 0 0-2 0V4H8V2.5a1 1 0 0 0-2 0V4H4.5A2.5 2.5 0 0 0 2 6.5v13A2.5 2.5 0 0 0 4.5 22h15a2.5 2.5 0 0 0 2.5-2.5v-13A2.5 2.5 0 0 0 19.5 4zm.5 15.5a.5.5 0 0 1-.5.5h-15a.5.5 0 0 1-.5-.5V10h16v9.5z" fill="#4285F4"/>
+                </svg>
+                Google Calendar
+              </a>
+              <a href="#" target="_blank" rel="noopener noreferrer" class="btn-secondary" id="btn-add-outlook-cal" style="display: inline-flex; align-items: center; gap: 6px; text-decoration: none;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M21.5 4H7.5A2.5 2.5 0 0 0 5 6.5V9H2.5A2.5 2.5 0 0 0 0 11.5v6A2.5 2.5 0 0 0 2.5 20H14v1.5a.5.5 0 0 0 .8.4l8-5.5a.5.5 0 0 0 .2-.4V6.5A2.5 2.5 0 0 0 21.5 4z" fill="#0078D4"/>
+                </svg>
+                Outlook
+              </a>
+              <button class="btn-secondary" id="btn-download-ics">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="7 10 12 15 17 10"></polyline>
+                  <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                Descargar .ics
+              </button>
+            </div>
+            <div>
+              <button class="btn-primary" data-close-modal="modal-public-booking">Cerrar y volver</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: INTERNAL NOTE -->
+  <div class="modal-overlay" id="modal-internal-note">
+    <div class="modal-box" style="max-width: 480px;">
+      <div class="modal-header">
+        <h2 class="modal-title">Nota interna</h2>
+        <button class="modal-close-btn" data-close-modal="modal-internal-note">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="form-hint" style="margin-bottom: 12px;">Esta nota es estrictamente privada y solo visible para ti en este panel.</p>
+        <textarea id="internal-note-textarea" class="form-control" rows="4" placeholder="Escribe notas privadas aquí..."></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" data-close-modal="modal-internal-note">Cancelar</button>
+        <button class="btn-primary" id="btn-save-internal-note">Guardar nota</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: GOOGLE CALENDAR INTEGRATION -->
+  <div class="modal-overlay" id="modal-google-calendar">
+    <div class="modal-box" style="max-width: 680px;">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <svg width="24" height="24" viewBox="0 0 24 24">
+            <path fill="#4285F4" d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11z"/>
+            <path fill="#34A853" d="M7 10h5v5H7z"/>
+            <path fill="#FBBC05" d="M12 10h5v5h-5z"/>
+            <path fill="#EA4335" d="M7 15h5v4H7z"/>
+          </svg>
+          <div>
+            <h2 class="modal-title" style="margin-bottom: 2px;">Conectar Google Calendar</h2>
+            <p style="font-size: 0.8125rem; color: var(--text-muted); margin: 0;">Sincronización en tiempo real y bloqueo inteligente de horarios</p>
+          </div>
+        </div>
+        <button class="modal-close-btn" data-close-modal="modal-google-calendar">&times;</button>
+      </div>
+
+      <div class="modal-nav-tabs" style="padding: 0 24px;">
+        <button class="modal-nav-tab active" data-gcal-tab="sync">1. Sincronización iCal (Recomendada)</button>
+        <button class="modal-nav-tab" data-gcal-tab="feed">2. Suscribir a Google Calendar</button>
+        <button class="modal-nav-tab" data-gcal-tab="oauth">3. Google Cloud API</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- TAB 1: ICAL SYNC (AUTO READ & BLOCK SLOTS) -->
+        <div id="tab-gcal-sync" class="gcal-tab-pane active">
+          <!-- Notice alert about https://calendar.google.com/calendar/u/0/r -->
+          <div class="gcal-info-callout">
+            <div class="callout-icon">ℹ️</div>
+            <div>
+              <strong>Conexión con tu cuenta de Google Calendar:</strong>
+              <div style="margin-top: 4px; font-size: 0.8125rem; color: var(--text-secondary);">
+                El enlace <code style="background: rgba(0,0,0,0.06); padding: 2px 6px; border-radius: 4px;">https://calendar.google.com/calendar/u/0/r</code> corresponde a la ventana general del navegador. Para que esta app pueda leer tus eventos ocupados sin requerir contraseñas, se conecta a través de la <strong>Dirección secreta en formato iCal</strong> de ese mismo calendario.
+              </div>
+            </div>
+          </div>
+
+          <!-- Step by Step instructions -->
+          <div class="gcal-step-guide">
+            <div class="step-guide-item">
+              <span class="step-num">1</span>
+              <div>
+                <span>Abre tu <a href="https://calendar.google.com/calendar/u/0/r" target="_blank" rel="noopener noreferrer" style="color: var(--primary); font-weight: 600; text-decoration: underline;">Google Calendar (u/0/r)</a> o ve directamente a los ajustes:</span>
+                <div style="margin-top: 6px;">
+                  <a href="https://calendar.google.com/calendar/u/0/r/settings" target="_blank" rel="noopener noreferrer" class="btn-secondary" style="font-size: 0.75rem; padding: 4px 10px; display: inline-flex; align-items: center; gap: 4px; text-decoration: none;">
+                    Abrir Ajustes de Google Calendar ↗
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            <div class="step-guide-item">
+              <span class="step-num">2</span>
+              <div>
+                En la columna lateral izquierda, en <strong>"Configuración de mis calendarios"</strong>, selecciona tu calendario principal.
+              </div>
+            </div>
+
+            <div class="step-guide-item">
+              <span class="step-num">3</span>
+              <div>
+                Desplázate hacia abajo hasta la sección <strong>"Dirección secreta en formato iCal"</strong> y haz clic en el icono de <strong>Copiar</strong> (la URL termina en <code>/basic.ics</code>).
+              </div>
+            </div>
+
+            <div class="step-guide-item">
+              <span class="step-num">4</span>
+              <div>
+                Pega la URL copiada en el campo siguiente y presiona <strong>Conectar y Sincronizar</strong>.
+              </div>
+            </div>
+          </div>
+
+          <!-- Form / Input Area -->
+          <div style="margin-top: 20px;">
+            <div class="form-group">
+              <label class="form-label" for="input-gcal-ical-url">Dirección secreta en formato iCal de Google Calendar</label>
+              <div style="display: flex; gap: 8px;">
+                <input type="url" id="input-gcal-ical-url" class="form-control" placeholder="https://calendar.google.com/calendar/ical/.../basic.ics">
+                <button class="btn-primary" id="btn-gcal-connect-submit" style="white-space: nowrap;">
+                  Conectar
+                </button>
+              </div>
+              <span class="form-hint">Tu enlace iCal privado permite leer horarios ocupados con total privacidad.</span>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 16px;">
+              <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.875rem;">
+                <input type="checkbox" id="chk-gcal-autoblock" checked>
+                <span><strong>Bloquear automáticamente los horarios ocupados</strong> de Google Calendar en el selector de reservas públicas</span>
+              </label>
+            </div>
+
+            <!-- Demo shortcut button -->
+            <div style="background: var(--bg-subtle); padding: 12px 16px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px;">
+              <div style="font-size: 0.8125rem; color: var(--text-secondary);">
+                ¿Quieres probar la sincronización de inmediato sin buscar el enlace?
+              </div>
+              <button type="button" class="btn-secondary" id="btn-gcal-demo-submit" style="font-size: 0.8125rem; white-space: nowrap; font-weight: 600;">
+                ✨ Probar con Demo
+              </button>
+            </div>
+          </div>
+
+          <!-- CONNECTED STATUS BOX (Visible when connected) -->
+          <div id="gcal-connected-panel" style="display: none; margin-top: 24px; border: 1px solid var(--accent-emerald); background: var(--accent-emerald-light); border-radius: var(--radius-lg); padding: 20px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <div style="width: 12px; height: 12px; border-radius: 50%; background: var(--accent-emerald); box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.2);"></div>
+                <strong style="color: var(--text-main); font-size: 1rem;">Conectado y Sincronizado</strong>
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <button type="button" class="btn-secondary" id="btn-gcal-sync-now" style="font-size: 0.75rem; padding: 6px 12px; background: var(--bg-card);">
+                  ↻ Sincronizar ahora
+                </button>
+                <button type="button" class="btn-secondary" id="btn-gcal-disconnect" style="font-size: 0.75rem; padding: 6px 12px; color: var(--accent-rose); background: var(--bg-card);">
+                  Desconectar
+                </button>
+              </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 0.8125rem; margin-bottom: 14px;">
+              <div>
+                <span style="color: var(--text-muted);">Calendario:</span>
+                <strong id="gcal-display-name" style="display: block; color: var(--text-main);">Google Calendar</strong>
+              </div>
+              <div>
+                <span style="color: var(--text-muted);">Eventos bloqueantes detectados:</span>
+                <strong id="gcal-display-count" style="display: block; color: var(--text-main);">0 eventos</strong>
+              </div>
+            </div>
+
+            <!-- Preview of detected busy events -->
+            <div>
+              <span style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary);">Próximos eventos ocupados bloqueados:</span>
+              <div id="gcal-events-preview-list" style="margin-top: 8px; max-height: 140px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;">
+                <!-- Populated by JS -->
+              </div>
+            </div>
+
+            <!-- Direct button to open public page -->
+            <div style="margin-top: 16px; padding-top: 14px; border-top: 1px dashed rgba(16, 185, 129, 0.4);">
+              <button type="button" class="btn-primary" id="btn-gcal-open-public-page" style="width: 100%; justify-content: center; padding: 10px; font-weight: 600;">
+                📅 Ver mi Página Pública de Reservas
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 2: FEED SUBSCRIPTION -->
+        <div id="tab-gcal-feed" class="gcal-tab-pane" style="display: none;">
+          <p class="form-hint" style="margin-bottom: 16px;">
+            Suscribe tu Google Calendar al feed de esta aplicación para que todas las reuniones que agenden tus clientes aparezcan automáticamente en tu calendario de <strong>calendar.google.com/calendar/u/0/r</strong>.
+          </p>
+
+          <div class="form-group">
+            <label class="form-label">URL del Feed iCal de Reuniones</label>
+            <div style="display: flex; gap: 8px;">
+              <input type="text" id="gcal-feed-url-input" class="form-control" readonly value="">
+              <button class="btn-primary" id="btn-copy-feed-url">Copiar URL</button>
+            </div>
+            <span class="form-hint">Este enlace genera dinámicamente el estándar iCal (RFC 5545) con tus citas.</span>
+          </div>
+
+          <div style="margin-top: 24px; padding: 18px; border: 1px solid var(--border-light); border-radius: var(--radius-md); background: var(--bg-subtle);">
+            <h4 style="font-size: 0.9375rem; font-weight: 600; margin-bottom: 8px;">Añadir con 1-clic a Google Calendar:</h4>
+            <p style="font-size: 0.8125rem; color: var(--text-secondary); margin-bottom: 14px;">
+              Haz clic en el siguiente botón para abrir Google Calendar directamente en la pantalla de "Añadir calendario desde URL":
+            </p>
+            <a href="https://calendar.google.com/calendar/u/0/r/settings/addbyurl" target="_blank" rel="noopener noreferrer" class="btn-secondary" style="display: inline-flex; align-items: center; gap: 8px; text-decoration: none; font-weight: 600;">
+              <svg width="18" height="18" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11z"/>
+                <path fill="#34A853" d="M7 10h5v5H7z"/>
+                <path fill="#FBBC05" d="M12 10h5v5h-5z"/>
+                <path fill="#EA4335" d="M7 15h5v4H7z"/>
+              </svg>
+              Abrir "Añadir por URL" en Google Calendar ↗
+            </a>
+          </div>
+        </div>
+
+        <!-- TAB 3: OAUTH / GOOGLE CLOUD -->
+        <div id="tab-gcal-oauth" class="gcal-tab-pane" style="display: none;">
+          <p class="form-hint" style="margin-bottom: 16px;">
+            Para entornos corporativos o sincronización nativa mediante Google Calendar API (OAuth 2.0).
+          </p>
+
+          <div style="background: var(--bg-subtle); padding: 16px; border-radius: var(--radius-md); font-size: 0.8125rem; color: var(--text-secondary); line-height: 1.6; margin-bottom: 18px;">
+            <strong>Requisitos de Google Cloud Console:</strong>
+            <ol style="margin-left: 20px; margin-top: 8px;">
+              <li>Crear un proyecto en <a href="https://console.cloud.google.com" target="_blank" rel="noopener noreferrer" style="color: var(--primary);">console.cloud.google.com</a>.</li>
+              <li>Habilitar la <strong>Google Calendar API</strong>.</li>
+              <li>Crear credenciales OAuth 2.0 (Tipo de aplicación Web).</li>
+              <li>Agregar el URI de redireccionamiento autorizado: <code>http://127.0.0.1:3000/oauth2callback</code>.</li>
+            </ol>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="oauth-client-id">Google Client ID</label>
+            <input type="text" id="oauth-client-id" class="form-control" placeholder="123456789-abcdef.apps.googleusercontent.com">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="oauth-api-key">Google API Key (opcional)</label>
+            <input type="password" id="oauth-api-key" class="form-control" placeholder="AIzaSy...">
+          </div>
+
+          <button class="btn-primary" id="btn-save-oauth-settings" style="margin-top: 10px;">
+            Guardar Configuración OAuth
+          </button>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <a href="https://calendar.google.com/calendar/u/0/r" target="_blank" rel="noopener noreferrer" class="btn-secondary" style="margin-right: auto; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <line x1="10" y1="14" x2="21" y2="3"></line>
+          </svg>
+          Ir a calendar.google.com/calendar/u/0/r ↗
+        </a>
+        <button class="btn-secondary" data-close-modal="modal-google-calendar">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: GOOGLE OAUTH .ENV SETUP GUIDE -->
+  <div class="modal-overlay" id="modal-env-setup">
+    <div class="modal-box" style="max-width: 680px;">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <svg width="24" height="24" viewBox="0 0 24 24">
+            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+          </svg>
+          <div>
+            <h2 class="modal-title" style="margin-bottom: 2px;">Configuración de Google OAuth en .env</h2>
+            <p style="font-size: 0.8125rem; color: var(--text-muted); margin: 0;">Valores requeridos para que funcione el login con Google como en Calendly</p>
+          </div>
+        </div>
+        <button class="modal-close-btn" data-close-modal="modal-env-setup">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <div id="env-modal-status-badge" style="margin-bottom: 16px; padding: 10px 14px; border-radius: 8px; font-size: 0.84rem; display: flex; align-items: center; justify-content: space-between; background: #fffbeb; border: 1px solid #fde68a; color: #92400e;">
+          <span><strong>Estado en .env:</strong> <span id="env-status-text">Detectando credenciales...</span></span>
+          <span id="env-status-pill" style="padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 700; background: #fbbf24; color: #78350f;">PENDIENTE</span>
+        </div>
+
+        <h4 style="font-size: 0.9375rem; font-weight: 700; margin-bottom: 8px; color: var(--text-main);">
+          ¿Qué datos debes pasar a tu archivo <code>.env</code>?
+        </h4>
+
+        <div style="display: flex; flex-direction: column; gap: 14px; margin-top: 12px;">
+          <div style="display: flex; gap: 12px; align-items: flex-start;">
+            <div class="env-step-number">1</div>
+            <div style="flex: 1;">
+              <strong style="color: var(--text-main); font-size: 0.875rem;">GOOGLE_CLIENT_ID</strong>
+              <p style="font-size: 0.8125rem; color: var(--text-secondary); margin: 2px 0 6px;">
+                Identificador de tu app generado en Google Cloud Console (termina en <code>.apps.googleusercontent.com</code>).
+              </p>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 12px; align-items: flex-start;">
+            <div class="env-step-number">2</div>
+            <div style="flex: 1;">
+              <strong style="color: var(--text-main); font-size: 0.875rem;">GOOGLE_CLIENT_SECRET</strong>
+              <p style="font-size: 0.8125rem; color: var(--text-secondary); margin: 2px 0 6px;">
+                El secreto privado que te entrega Google al crear las credenciales OAuth tipo "Aplicación web".
+              </p>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 12px; align-items: flex-start;">
+            <div class="env-step-number">3</div>
+            <div style="flex: 1;">
+              <strong style="color: var(--text-main); font-size: 0.875rem;">GOOGLE_REDIRECT_URI</strong>
+              <p style="font-size: 0.8125rem; color: var(--text-secondary); margin: 2px 0 6px;">
+                La URL de retorno que debes autorizar en Google Cloud Console:
+              </p>
+              <div style="display: flex; gap: 6px;">
+                <input type="text" readonly value="http://localhost:3000/api/auth/google/callback" class="form-control" style="font-family: monospace; font-size: 0.8rem; padding: 6px 10px;" id="copy-redirect-uri-val">
+                <button class="btn-secondary" id="btn-copy-redirect-uri" style="white-space: nowrap; padding: 6px 12px; font-size: 0.8rem;">Copiar</button>
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 12px; align-items: flex-start;">
+            <div class="env-step-number">4</div>
+            <div style="flex: 1;">
+              <strong style="color: var(--text-main); font-size: 0.875rem;">Orígenes autorizados de JavaScript (Google Console)</strong>
+              <p style="font-size: 0.8125rem; color: var(--text-secondary); margin: 2px 0 6px;">
+                Agrega estos dos orígenes en la consola de Google:
+              </p>
+              <code style="display: block; background: var(--bg-subtle); padding: 6px 10px; border-radius: 6px; font-size: 0.8rem; color: var(--text-main);">
+                http://localhost:3000<br>http://127.0.0.1:3000
+              </code>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top: 18px;">
+          <label style="font-size: 0.875rem; font-weight: 600; color: var(--text-main); margin-bottom: 6px; display: block;">
+            Contenido de tu archivo <code>.env</code>:
+          </label>
+          <div class="env-code-box">
+            <button class="env-copy-btn" id="btn-copy-env-snippet">Copiar .env</button>
+            <pre style="margin: 0; font-family: inherit;"><span style="color: #60a5fa;">GOOGLE_CLIENT_ID</span>=tu_google_client_id_aqui.apps.googleusercontent.com
+<span style="color: #60a5fa;">GOOGLE_CLIENT_SECRET</span>=tu_google_client_secret_aqui
+<span style="color: #60a5fa;">GOOGLE_REDIRECT_URI</span>=http://localhost:3000/api/auth/google/callback
+<span style="color: #60a5fa;">GOOGLE_SCOPES</span>="openid email profile https://www.googleapis.com/auth/calendar.events"
+<span style="color: #60a5fa;">SESSION_SECRET</span>=reuniones_super_secret_jwt_key_2026_change_in_production
+<span style="color: #60a5fa;">PORT</span>=3000</pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" class="btn-primary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+          Abrir Google Cloud Console ↗
+        </a>
+        <button class="btn-secondary" id="btn-modal-test-demo" style="margin-left: auto;">
+          Probar con Usuario Demo
+        </button>
+        <button class="btn-secondary" data-close-modal="modal-env-setup">Entendido</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notifications Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Application Logic -->
+  <script src="/app.js"></script>
+</body>
+</html>

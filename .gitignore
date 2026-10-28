@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+
+# Vercel Cache & Config
+.vercel/
+
+# Runtime Sessions & Temp files
+user-sessions.json
+*.log
+.DS_Store

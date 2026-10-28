@@ -1,0 +1,46 @@
+{
+  "version": 2,
+  "functions": {
+    "api/index.js": {
+      "includeFiles": "*.json"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index.js"
+    },
+    {
+      "source": "/api",
+      "destination": "/api/index.js"
+    },
+    {
+      "source": "/feed.ics",
+      "destination": "/api/index.js"
+    },
+    {
+      "source": "/login",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/app/(.*)",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/app",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/booking/(.*)",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/booking",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/user/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
