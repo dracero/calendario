@@ -71,14 +71,32 @@ function readBody(req) {
 }
 
 function sendJson(res, statusCode, data, headers = {}) {
-  res.writeHead(statusCode, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    ...headers
-  });
-  res.end(JSON.stringify(data));
+  if (res.headersSent) return;
+  try {
+    if (headers) {
+      for (const [k, v] of Object.entries(headers)) {
+        res.setHeader(k, v);
+      }
+    }
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    if (typeof res.status === 'function' && typeof res.json === 'function') {
+      return res.status(statusCode).json(data);
+    }
+
+    res.writeHead(statusCode, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      ...headers
+    });
+    res.end(JSON.stringify(data));
+  } catch (err) {
+    console.error('sendJson error:', err);
+  }
 }
 
 function parseCookies(req) {
@@ -432,11 +450,16 @@ export default async function handler(req, res) {
     let proto = req.headers['x-forwarded-proto'] || (host.includes('localhost') ? 'http' : 'https');
     if (proto.includes(',')) proto = proto.split(',')[0].trim();
 
+    let rawPath = req.url || '/';
+    if ((rawPath.startsWith('/api/index.js') || rawPath === '/api' || rawPath === '/api/') && req.headers['x-matched-path']) {
+      rawPath = req.headers['x-matched-path'];
+    }
+
     let parsedUrl;
     try {
-      parsedUrl = new URL(req.url || '/', `${proto}://${host}`);
+      parsedUrl = new URL(rawPath, `${proto}://${host}`);
     } catch {
-      parsedUrl = new URL(req.url || '/', 'https://reuniones.local');
+      parsedUrl = new URL(rawPath, 'https://reuniones.local');
     }
     const pathname = parsedUrl.pathname;
 
@@ -854,9 +877,12 @@ export default async function handler(req, res) {
     sendJson(res, 404, { error: 'Ruta no encontrada', path: pathname });
   } catch (fatalErr) {
     console.error('Fatal Serverless Error in handler:', fatalErr);
-    sendJson(res, 500, {
-      error: 'Error interno en función serverless',
-      message: fatalErr.message
-    });
+    if (!res.headersSent) {
+      sendJson(res, 500, {
+        error: 'Error interno en función serverless',
+        message: fatalErr.message
+      });
+    }
   }
 }
+

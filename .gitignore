@@ -3,10 +3,13 @@ node_modules/
 
 # Environment Variables
 .env
+.env*
 .env.local
 .env.*.local
 
-# Vercel Cache & Config
+# Build & Framework outputs
+dist/
+.astro/
 .vercel/
 
 # Runtime Sessions & Temp files

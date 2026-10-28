@@ -4,10 +4,22 @@
   "description": "Clon completo de Calendly Meeting Types y sistema de reservas en vanilla HTML/CSS/JS",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "node:server": "node server.js"
   },
-  "keywords": ["calendly", "scheduling", "meeting-types", "booking"],
+  "keywords": [
+    "calendly",
+    "scheduling",
+    "meeting-types",
+    "booking"
+  ],
   "author": "Antigravity",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@astrojs/vercel": "^11.0.17",
+    "astro": "^7.4.3"
+  }
 }

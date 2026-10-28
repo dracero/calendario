@@ -1,6 +1,12 @@
 .env
+.env*
 .env.local
 .git/
 .gitignore
 *.log
+# Legacy root entrypoints (handled natively by Astro now)
+api/
+server.js
+
 user-sessions.json
+

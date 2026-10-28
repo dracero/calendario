@@ -101,7 +101,7 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-// In local Node.js environments, listen on port. On Vercel, serverless handles requests.
+// In local Node.js environments, listen on port.
 if (!process.env.VERCEL) {
   server.listen(PORT, '127.0.0.1', () => {
     console.log(`🚀 Servidor de Reuniones activo en: http://127.0.0.1:${PORT}`);
@@ -112,6 +112,3 @@ if (!process.env.VERCEL) {
   });
 }
 
-export default function handler(req, res) {
-  return server.emit('request', req, res);
-}
