@@ -2373,6 +2373,10 @@
           btnG.textContent = (bookResult && bookResult.googleEventCreated)
             ? '✓ Sincronizado en Google Calendar desde la app'
             : '✓ Guardado en el calendario de la aplicación';
+          if (bookResult && !bookResult.googleEventCreated && bookResult.warning) {
+            showToast('No se pudo crear en Google Calendar: ' + bookResult.warning, '⚠️');
+            console.warn('Google Calendar API error:', bookResult.warning);
+          }
           btnG.onclick = async (ev) => {
             ev.preventDefault();
             btnG.disabled = true;
