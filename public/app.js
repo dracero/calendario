@@ -252,18 +252,23 @@
   }
 
   // --- Dynamic Host Information based on Per-Browser Session Auth ---
+  function sanitizePublicBrandName(name) {
+    if (!name || typeof name !== 'string') return '';
+    return name.replace(/calendly/gi, 'Reuniones').trim();
+  }
+
   function getHostName() {
     if (state.auth && state.auth.authenticated && state.auth.user && state.auth.user.name) {
-      return state.auth.user.name.trim();
+      return sanitizePublicBrandName(state.auth.user.name) || 'Agenda de Reuniones';
     }
     if (state.googleCalendar && state.googleCalendar.hostPublicName && state.googleCalendar.hostPublicName.trim()) {
-      return state.googleCalendar.hostPublicName.trim();
+      return sanitizePublicBrandName(state.googleCalendar.hostPublicName) || 'Agenda de Reuniones';
     }
-    return 'Alex Calendly';
+    return 'Agenda de Reuniones';
   }
 
   function getInitials(name) {
-    if (!name) return 'AC';
+    if (!name) return 'AR';
     const parts = name.trim().split(/\s+/).filter(Boolean);
     if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
     return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
@@ -451,7 +456,7 @@
         cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: 'Alex Calendly',
+          name: 'Alex Reuniones',
           email: 'alex.usuario@gmail.com'
         })
       });

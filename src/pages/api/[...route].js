@@ -230,7 +230,8 @@ export const ALL = async (context) => {
   // --- Auth: Demo Google Login ---
   if (pathname === '/api/auth/demo-login' && method === 'POST') {
     const body = await readRequestBody(request);
-    const demoName = body.name || 'Alex Calendly';
+    const rawDemoName = body.name || 'Alex Reuniones';
+    const demoName = String(rawDemoName).replace(/calendly/gi, 'Reuniones').trim() || 'Alex Reuniones';
     const demoEmail = body.email || 'alex.usuario@gmail.com';
 
     const user = {
@@ -329,11 +330,14 @@ export const ALL = async (context) => {
         end: ev.end,
         status: ev.status || 'CONFIRMED'
       }));
+      const cleanHostName = config.hostPublicName
+        ? String(config.hostPublicName).replace(/calendly/gi, 'Reuniones').trim()
+        : null;
       return jsonResponse({
         success: true,
         connected: !!config.connected,
         calendarName: null,
-        hostPublicName: config.hostPublicName || null,
+        hostPublicName: cleanHostName,
         lastSync: config.lastSync || null,
         autoBlock: config.autoBlock !== false,
         eventCount: publicBusyEvents.length,
@@ -342,11 +346,15 @@ export const ALL = async (context) => {
       });
     }
 
+    const cleanAuthHostName = (config.hostPublicName || user.name || '')
+      .replace(/calendly/gi, 'Reuniones')
+      .trim();
+
     return jsonResponse({
       success: true,
       connected: !!config.connected,
       calendarName: config.calendarName,
-      hostPublicName: config.hostPublicName || user.name,
+      hostPublicName: cleanAuthHostName || user.name,
       lastSync: config.lastSync,
       autoBlock: config.autoBlock !== false,
       eventCount: (config.events || []).length,
