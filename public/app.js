@@ -178,18 +178,27 @@
     }
   };
 
-  function loadState() {
+  function getCurrentUserStorageKey() {
+    if (state.auth && state.auth.authenticated && state.auth.user) {
+      const raw = (state.auth.user.email || state.auth.user.id || '').toLowerCase().trim();
+      if (raw) return raw.replace(/[^a-z0-9@._-]/g, '_');
+    }
+    return 'anonymous';
+  }
+
+  function loadState(customUserKey) {
     try {
-      const storedEvents = localStorage.getItem('reuniones_event_types');
-      state.eventTypes = storedEvents ? JSON.parse(storedEvents) : DEFAULT_EVENT_TYPES;
+      const userKey = customUserKey || getCurrentUserStorageKey();
+      const storedEvents = localStorage.getItem(`reuniones_event_types_${userKey}`);
+      state.eventTypes = storedEvents ? JSON.parse(storedEvents) : JSON.parse(JSON.stringify(DEFAULT_EVENT_TYPES));
 
-      const storedMeetings = localStorage.getItem('reuniones_scheduled');
-      state.scheduledMeetings = storedMeetings ? JSON.parse(storedMeetings) : DEFAULT_SCHEDULED_MEETINGS;
+      const storedMeetings = localStorage.getItem(`reuniones_scheduled_${userKey}`);
+      state.scheduledMeetings = storedMeetings ? JSON.parse(storedMeetings) : JSON.parse(JSON.stringify(DEFAULT_SCHEDULED_MEETINGS));
 
-      const storedSchedule = localStorage.getItem('reuniones_weekly_schedule');
-      state.weeklySchedule = storedSchedule ? JSON.parse(storedSchedule) : DEFAULT_WEEKLY_SCHEDULE;
+      const storedSchedule = localStorage.getItem(`reuniones_weekly_schedule_${userKey}`);
+      state.weeklySchedule = storedSchedule ? JSON.parse(storedSchedule) : JSON.parse(JSON.stringify(DEFAULT_WEEKLY_SCHEDULE));
 
-      const storedTz = localStorage.getItem('reuniones_timezone');
+      const storedTz = localStorage.getItem(`reuniones_timezone_${userKey}`) || localStorage.getItem('reuniones_timezone');
       if (storedTz) state.timezone = storedTz;
 
       const storedTheme = localStorage.getItem('reuniones_theme');
@@ -198,21 +207,69 @@
       }
     } catch (e) {
       console.warn('Error reading from localStorage, using defaults:', e);
-      state.eventTypes = DEFAULT_EVENT_TYPES;
-      state.scheduledMeetings = DEFAULT_SCHEDULED_MEETINGS;
-      state.weeklySchedule = DEFAULT_WEEKLY_SCHEDULE;
+      state.eventTypes = JSON.parse(JSON.stringify(DEFAULT_EVENT_TYPES));
+      state.scheduledMeetings = JSON.parse(JSON.stringify(DEFAULT_SCHEDULED_MEETINGS));
+      state.weeklySchedule = JSON.parse(JSON.stringify(DEFAULT_WEEKLY_SCHEDULE));
     }
   }
 
   function saveState() {
     try {
-      localStorage.setItem('reuniones_event_types', JSON.stringify(state.eventTypes));
-      localStorage.setItem('reuniones_scheduled', JSON.stringify(state.scheduledMeetings));
-      localStorage.setItem('reuniones_weekly_schedule', JSON.stringify(state.weeklySchedule));
-      localStorage.setItem('reuniones_timezone', state.timezone);
+      const userKey = getCurrentUserStorageKey();
+      localStorage.setItem(`reuniones_event_types_${userKey}`, JSON.stringify(state.eventTypes));
+      localStorage.setItem(`reuniones_scheduled_${userKey}`, JSON.stringify(state.scheduledMeetings));
+      localStorage.setItem(`reuniones_weekly_schedule_${userKey}`, JSON.stringify(state.weeklySchedule));
+      localStorage.setItem(`reuniones_timezone_${userKey}`, state.timezone);
     } catch (e) {
       console.error('Failed to save to localStorage:', e);
     }
+  }
+
+  function loadUserLocalCalendarMeta(userKey) {
+    if (!userKey || userKey === 'anonymous') return null;
+    try {
+      const raw = localStorage.getItem(`reuniones_gcal_user_${userKey}`);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function saveUserLocalCalendarMeta(meta) {
+    const userKey = getCurrentUserStorageKey();
+    if (!userKey || userKey === 'anonymous') return;
+    try {
+      localStorage.setItem(`reuniones_gcal_user_${userKey}`, JSON.stringify(meta));
+    } catch (e) {
+      console.warn('Failed to save user calendar metadata:', e);
+    }
+  }
+
+  function clearUserLocalCalendarMeta() {
+    const userKey = getCurrentUserStorageKey();
+    if (!userKey || userKey === 'anonymous') return;
+    try {
+      localStorage.removeItem(`reuniones_gcal_user_${userKey}`);
+    } catch (e) {
+      console.warn('Failed to clear user calendar metadata:', e);
+    }
+  }
+
+  function resetCalendarStateInMemory() {
+    state.googleCalendar = {
+      connected: false,
+      calendarName: null,
+      hostPublicName: null,
+      lastSync: null,
+      autoBlock: true,
+      icalUrl: '',
+      events: [],
+      eventCount: 0,
+      isDemo: false,
+      syncMode: null
+    };
+    const urlInput = document.getElementById('input-gcal-ical-url');
+    if (urlInput) urlInput.value = '';
   }
 
   // --- Toast Notifications ---
@@ -315,9 +372,13 @@
     if (dropBadge) {
       if (state.auth && state.auth.authenticated) {
         dropBadge.style.display = 'inline-flex';
-        dropBadge.innerHTML = state.auth.user?.isDemo
-          ? '<span>⚡ Demo Google</span>'
-          : '<svg width="12" height="12" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg> Google OAuth';
+        if (state.auth.user?.isDemo) {
+          dropBadge.innerHTML = '<span>⚡ Demo Google</span>';
+        } else if (state.auth.user?.provider === 'email') {
+          dropBadge.innerHTML = '<span>✉️ Cuenta registrada</span>';
+        } else {
+          dropBadge.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg> Google OAuth';
+        }
       } else {
         dropBadge.style.display = 'none';
       }
@@ -411,6 +472,7 @@
   }
 
   async function checkAuthStatus() {
+    const prevUserKey = getCurrentUserStorageKey();
     try {
       const res = await fetch('/api/auth/me', {
         method: 'GET',
@@ -425,6 +487,15 @@
         state.auth.user = data.user || null;
         state.auth.googleConfigured = !!data.googleConfigured;
         state.auth.googleClientId = data.googleClientId || null;
+
+        const nextUserKey = getCurrentUserStorageKey();
+        if (nextUserKey !== prevUserKey) {
+          resetCalendarStateInMemory();
+          loadState(nextUserKey);
+          renderEventTypes();
+          renderScheduledMeetings();
+          renderWeeklySchedule();
+        }
         updateHostProfileUI();
         return data;
       }
@@ -434,6 +505,7 @@
     state.auth.authenticated = false;
     state.auth.checked = true;
     state.auth.user = null;
+    resetCalendarStateInMemory();
     updateHostProfileUI();
     return null;
   }
@@ -473,6 +545,34 @@
     }
   }
 
+  async function loginOrRegisterByEmail(email, name, isSignup = false) {
+    try {
+      const endpoint = isSignup ? '/api/auth/register' : '/api/auth/email-login';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, name })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        showToast(data.error || 'Error al iniciar sesión', '⚠️');
+        return false;
+      }
+      resetCalendarStateInMemory();
+      await checkAuthStatus();
+      await fetchCalendarStatus();
+      showToast(`¡Bienvenido, ${data.user?.name || email}! Tu cuenta y calendario son independientes.`, '🎉');
+      window.location.hash = '#meeting_types';
+      switchView('event-types');
+      return true;
+    } catch (err) {
+      showToast('Error de red al autenticar: ' + err.message, '⚠️');
+      return false;
+    }
+  }
+
   async function logoutUser() {
     try {
       await fetch('/api/auth/logout', {
@@ -482,7 +582,9 @@
       });
       state.auth.authenticated = false;
       state.auth.user = null;
-      state.googleCalendar.calendarName = null;
+      resetCalendarStateInMemory();
+      loadState('anonymous');
+      updateGoogleCalendarUI();
       updateHostProfileUI();
       showToast('Has cerrado sesión en este navegador', '✓');
       const dropdown = document.getElementById('user-profile-dropdown');
@@ -2120,6 +2222,15 @@
   });
 
   async function fetchCalendarStatus() {
+    if (!state.auth.authenticated || !state.auth.user) {
+      resetCalendarStateInMemory();
+      updateGoogleCalendarUI();
+      return;
+    }
+
+    const userKey = getCurrentUserStorageKey();
+    const localMeta = loadUserLocalCalendarMeta(userKey);
+
     try {
       const res = await fetch('/api/calendar/status', {
         method: 'GET',
@@ -2129,17 +2240,41 @@
       if (!res.ok) return;
       const data = await res.json();
       if (data.success) {
-        state.googleCalendar = {
-          connected: !!data.connected,
-          calendarName: data.calendarName || null,
-          hostPublicName: data.hostPublicName || null,
-          icalUrl: data.icalUrl || state.googleCalendar.icalUrl || '',
-          lastSync: data.lastSync,
-          autoBlock: data.autoBlock !== false,
-          eventCount: data.eventCount || (data.events || []).length,
-          events: data.events || [],
-          isDemo: !!data.isDemo
-        };
+        // If server is disconnected ONLY because of a serverless cold start,
+        // restore ONLY if THIS specific user had previously connected in this browser.
+        if (!data.connected && localMeta && localMeta.connected && localMeta.userKey === userKey) {
+          state.googleCalendar = {
+            connected: true,
+            calendarName: localMeta.calendarName || `Google Calendar (${state.auth.user.email})`,
+            hostPublicName: state.auth.user.name || null,
+            icalUrl: localMeta.icalUrl || '',
+            lastSync: localMeta.lastSync || null,
+            autoBlock: localMeta.autoBlock !== false,
+            eventCount: Array.isArray(localMeta.events) ? localMeta.events.length : 0,
+            events: Array.isArray(localMeta.events) ? localMeta.events : [],
+            isDemo: !!localMeta.isDemo,
+            syncMode: localMeta.syncMode || null
+          };
+        } else {
+          state.googleCalendar = {
+            connected: !!data.connected,
+            calendarName: data.connected ? (data.calendarName || null) : null,
+            hostPublicName: data.hostPublicName || state.auth.user.name || null,
+            icalUrl: data.connected ? (data.icalUrl || '') : '',
+            lastSync: data.connected ? data.lastSync : null,
+            autoBlock: data.autoBlock !== false,
+            eventCount: data.connected ? (data.eventCount || (data.events || []).length) : 0,
+            events: data.connected ? (data.events || []) : [],
+            isDemo: data.connected ? !!data.isDemo : false,
+            syncMode: data.connected ? (data.syncMode || null) : null
+          };
+          if (state.googleCalendar.connected) {
+            saveUserLocalCalendarMeta({
+              userKey,
+              ...state.googleCalendar
+            });
+          }
+        }
         updateGoogleCalendarUI();
       }
     } catch (e) {
@@ -2148,8 +2283,21 @@
   }
 
   function updateGoogleCalendarUI() {
-    const isConn = state.googleCalendar.connected;
+    const isConn = !!state.googleCalendar.connected;
     updateHostProfileUI();
+
+    // Show/hide 1-click Google OAuth calendar connect box if logged in with Google
+    const oauthDirectBox = document.getElementById('gcal-oauth-direct-box');
+    if (oauthDirectBox) {
+      const isGoogleUser = !!(state.auth && state.auth.authenticated && state.auth.user && state.auth.user.provider === 'google');
+      oauthDirectBox.style.display = isGoogleUser ? 'block' : 'none';
+    }
+
+    // Keep iCal input isolated per user
+    const urlInput = document.getElementById('input-gcal-ical-url');
+    if (urlInput) {
+      urlInput.value = isConn ? (state.googleCalendar.icalUrl || '') : '';
+    }
     
     // Header Badge
     const headerBadge = document.getElementById('header-gcal-badge');
@@ -2173,7 +2321,7 @@
       if (isConn) {
         availDesc.innerHTML = `Sincronizado con <strong>${state.googleCalendar.calendarName || 'Google Calendar'}</strong> (${state.googleCalendar.eventCount} eventos bloqueantes). <a href="https://calendar.google.com/calendar/u/0/r" target="_blank" rel="noopener noreferrer" style="color: var(--primary); text-decoration: underline;">Abrir calendar.google.com/calendar/u/0/r ↗</a>`;
       } else {
-        availDesc.innerHTML = `Vinculado a <a href="https://calendar.google.com/calendar/u/0/r" target="_blank" rel="noopener noreferrer" style="color: var(--primary); text-decoration: underline;">calendar.google.com/calendar/u/0/r</a>. Bloquea horarios ocupados automáticamente.`;
+        availDesc.innerHTML = `Cada usuario tiene su propia sincronización independiente. Conecta tu Google Calendar para bloquear tus horarios ocupados automáticamente.`;
       }
     }
 
@@ -2214,7 +2362,7 @@
     }
   }
 
-  async function connectGoogleCalendar(icalUrl, isDemo = false) {
+  async function connectGoogleCalendar(icalUrl, isDemo = false, useGoogleOAuth = false) {
     const autoBlock = document.getElementById('chk-gcal-autoblock') ? document.getElementById('chk-gcal-autoblock').checked : true;
     try {
       showToast('Conectando a Google Calendar...', '⏳');
@@ -2223,7 +2371,7 @@
         credentials: 'same-origin',
         cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ icalUrl, autoBlock, isDemo })
+        body: JSON.stringify({ icalUrl, autoBlock, isDemo, useGoogleOAuth })
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
@@ -2235,17 +2383,23 @@
         return false;
       }
 
+      const syncMode = useGoogleOAuth ? 'google_oauth' : (isDemo ? 'demo' : 'ical');
       state.googleCalendar = {
         connected: true,
         calendarName: data.calendarName,
-        hostPublicName: state.googleCalendar.hostPublicName || null,
+        hostPublicName: (state.auth.user && state.auth.user.name) || state.googleCalendar.hostPublicName || null,
         icalUrl: data.icalUrl || icalUrl || '',
         lastSync: new Date().toISOString(),
         autoBlock: autoBlock,
-        eventCount: data.count || (data.events || []).length,
+        eventCount: typeof data.count === 'number' ? data.count : (data.events || []).length,
         events: data.events || [],
-        isDemo: !!isDemo
+        isDemo: !!isDemo,
+        syncMode
       };
+      saveUserLocalCalendarMeta({
+        userKey: getCurrentUserStorageKey(),
+        ...state.googleCalendar
+      });
       updateGoogleCalendarUI();
       showToast(`¡Conectado exitosamente con ${data.calendarName}!`, '🎉');
       if (state.selectedDate) {
@@ -2286,7 +2440,8 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           icalUrl: inputIcal || state.googleCalendar.icalUrl || '',
-          isDemo: !!state.googleCalendar.isDemo
+          isDemo: !!state.googleCalendar.isDemo,
+          syncMode: state.googleCalendar.syncMode || null
         })
       });
       const data = await res.json();
@@ -2297,6 +2452,10 @@
         state.googleCalendar.events = events;
         state.googleCalendar.eventCount = typeof data.count === 'number' ? data.count : events.length;
         state.googleCalendar.lastSync = new Date().toISOString();
+        saveUserLocalCalendarMeta({
+          userKey: getCurrentUserStorageKey(),
+          ...state.googleCalendar
+        });
         updateGoogleCalendarUI();
         if (state.selectedDate) {
           renderTimeSlots();
@@ -2334,22 +2493,14 @@
       });
       const data = await res.json();
       if (data.success) {
-        state.googleCalendar = {
-          connected: false,
-          calendarName: null,
-          icalUrl: '',
-          lastSync: null,
-          autoBlock: true,
-          eventCount: 0,
-          events: [],
-          isDemo: false
-        };
+        clearUserLocalCalendarMeta();
+        resetCalendarStateInMemory();
         updateGoogleCalendarUI();
         if (state.selectedDate) {
           renderTimeSlots();
           renderPublicTimeSlots();
         }
-        showToast('Google Calendar desconectado', 'ℹ️');
+        showToast('Google Calendar desconectado para este usuario', 'ℹ️');
       }
     } catch (e) {
       showToast('Error al desconectar', '⚠️');
@@ -2396,14 +2547,21 @@
         showToast('Pega tu enlace iCal de Google Calendar primero', '⚠️');
         return;
       }
-      connectGoogleCalendar(url, false);
+      connectGoogleCalendar(url, false, false);
+    });
+  }
+
+  const oauthConnectBtn = document.getElementById('btn-gcal-oauth-connect');
+  if (oauthConnectBtn) {
+    oauthConnectBtn.addEventListener('click', () => {
+      connectGoogleCalendar('', false, true);
     });
   }
 
   const demoSubmitBtn = document.getElementById('btn-gcal-demo-submit');
   if (demoSubmitBtn) {
     demoSubmitBtn.addEventListener('click', () => {
-      connectGoogleCalendar('', true);
+      connectGoogleCalendar('', true, false);
     });
   }
 
@@ -2497,7 +2655,40 @@
     });
   }
 
-  // 3. Login Page Actions
+  // 3. Login & Registration Page Actions (Unique Per User)
+  let isSignupMode = false;
+
+  function setLoginSignupMode(signup) {
+    isSignupMode = !!signup;
+    const nameGroup = document.getElementById('login-group-name');
+    const titleEl = document.getElementById('login-card-title');
+    const subtitleEl = document.getElementById('login-card-subtitle');
+    const submitBtn = document.getElementById('btn-login-email-continue');
+    const footerPrompt = document.getElementById('login-footer-prompt');
+    const linkSignupEl = document.getElementById('link-login-signup');
+
+    if (nameGroup) nameGroup.style.display = isSignupMode ? 'block' : 'none';
+    if (titleEl) {
+      titleEl.textContent = isSignupMode
+        ? 'Crea tu cuenta en Reuniones'
+        : 'Inicia sesión en tu cuenta';
+    }
+    if (subtitleEl) {
+      subtitleEl.textContent = isSignupMode
+        ? 'Cada cuenta tiene su propio calendario y enlaces de reserva independientes.'
+        : 'Ingresa tu correo para comenzar.';
+    }
+    if (submitBtn) {
+      submitBtn.textContent = isSignupMode ? 'Crear cuenta' : 'Continuar';
+    }
+    if (footerPrompt) {
+      footerPrompt.textContent = isSignupMode ? '¿Ya tienes una cuenta?' : '¿No tienes una cuenta?';
+    }
+    if (linkSignupEl) {
+      linkSignupEl.textContent = isSignupMode ? 'Inicia sesión.' : 'Regístrate.';
+    }
+  }
+
   const btnLoginGoogle = document.getElementById('btn-login-google');
   if (btnLoginGoogle) {
     btnLoginGoogle.addEventListener('click', () => {
@@ -2508,7 +2699,7 @@
   const btnLoginMicrosoft = document.getElementById('btn-login-microsoft');
   if (btnLoginMicrosoft) {
     btnLoginMicrosoft.addEventListener('click', () => {
-      showToast('Inicio con Microsoft en desarrollo. Usa "Iniciar sesión con Google".', 'ℹ️');
+      showToast('Inicio con Microsoft en desarrollo. Usa tu correo o Google.', 'ℹ️');
     });
   }
 
@@ -2521,12 +2712,22 @@
 
   const formLoginEmail = document.getElementById('form-login-email');
   if (formLoginEmail) {
-    formLoginEmail.addEventListener('submit', (e) => {
+    formLoginEmail.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const email = document.getElementById('login-input-email').value.trim();
-      if (!email) return;
-      showToast(`Iniciando autenticación Google para ${email}...`, 'ℹ️');
-      initiateGoogleLogin();
+      const emailInput = document.getElementById('login-input-email');
+      const nameInput = document.getElementById('login-input-name');
+      const email = emailInput ? emailInput.value.trim() : '';
+      const name = nameInput ? nameInput.value.trim() : '';
+      if (!email) {
+        showToast('Ingresa un correo electrónico válido', '⚠️');
+        return;
+      }
+      if (isSignupMode && !name) {
+        showToast('Ingresa tu nombre completo para registrarte', '⚠️');
+        if (nameInput) nameInput.focus();
+        return;
+      }
+      await loginOrRegisterByEmail(email, name, isSignupMode);
     });
   }
 
@@ -2534,8 +2735,9 @@
   if (linkSignup) {
     linkSignup.addEventListener('click', (e) => {
       e.preventDefault();
-      showToast('En Calendly, el registro y login con Google son unificados. Haz clic en "Iniciar sesión con Google".', 'ℹ️');
-      initiateGoogleLogin();
+      setLoginSignupMode(!isSignupMode);
+      const targetInput = document.getElementById(isSignupMode ? 'login-input-name' : 'login-input-email');
+      if (targetInput) targetInput.focus();
     });
   }
 

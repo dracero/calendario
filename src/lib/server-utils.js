@@ -153,18 +153,25 @@ export function getRedirectUri(request) {
 }
 
 
-export function loadSyncConfig(userId = null) {
-  try {
-    if (fs.existsSync(SYNC_FILE)) {
-      const data = JSON.parse(fs.readFileSync(SYNC_FILE, 'utf-8'));
-      if (userId && data.byUser && data.byUser[userId]) {
-        return data.byUser[userId];
-      }
-      return data;
-    }
-  } catch (e) {
-    console.error('Error reading sync file:', e);
-  }
+export function getUserKey(user) {
+  if (!user) return null;
+  if (typeof user === 'string') return user.toLowerCase().trim();
+  if (user.email) return String(user.email).toLowerCase().trim();
+  if (user.id) return String(user.id).trim();
+  return null;
+}
+
+export function slugifyName(name) {
+  if (!name || typeof name !== 'string') return '';
+  return name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+export function createDefaultSyncConfig() {
   return {
     connected: false,
     calendarName: null,
@@ -173,30 +180,71 @@ export function loadSyncConfig(userId = null) {
     autoBlock: true,
     icalUrl: '',
     events: [],
-    byUser: {}
+    isDemo: false
   };
 }
 
-export function saveSyncConfig(config, userId = null) {
+export function loadSyncConfig(userId = null, hostSlug = null) {
+  const cleanKey = getUserKey(userId);
   try {
-    let existing = {};
     if (fs.existsSync(SYNC_FILE)) {
-      try {
-        existing = JSON.parse(fs.readFileSync(SYNC_FILE, 'utf-8'));
-      } catch {
-        existing = {};
+      const data = JSON.parse(fs.readFileSync(SYNC_FILE, 'utf-8'));
+      const byUser = data.byUser || {};
+      const bySlug = data.bySlug || {};
+
+      if (cleanKey) {
+        if (byUser[cleanKey]) {
+          return { ...createDefaultSyncConfig(), ...byUser[cleanKey] };
+        }
+        return createDefaultSyncConfig();
+      }
+
+      if (hostSlug) {
+        const mappedUserKey = bySlug[hostSlug];
+        if (mappedUserKey && byUser[mappedUserKey]) {
+          return { ...createDefaultSyncConfig(), ...byUser[mappedUserKey] };
+        }
       }
     }
-    const byUser = existing.byUser || {};
-    if (userId) {
-      byUser[userId] = { ...config };
+  } catch (e) {
+    console.error('Error reading sync file:', e);
+  }
+  return createDefaultSyncConfig();
+}
+
+export function saveSyncConfig(config, userId = null, hostSlug = null) {
+  const cleanKey = getUserKey(userId);
+  if (!cleanKey) return;
+  try {
+    let existing = { byUser: {}, bySlug: {} };
+    if (fs.existsSync(SYNC_FILE)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(SYNC_FILE, 'utf-8'));
+        existing.byUser = parsed.byUser || {};
+        existing.bySlug = parsed.bySlug || {};
+      } catch {
+        existing = { byUser: {}, bySlug: {} };
+      }
     }
-    const payload = {
-      ...existing,
-      ...config,
-      byUser
+    const cleanConfig = {
+      ...createDefaultSyncConfig(),
+      ...config
     };
-    fs.writeFileSync(SYNC_FILE, JSON.stringify(payload, null, 2), 'utf-8');
+    delete cleanConfig.byUser;
+    delete cleanConfig.bySlug;
+
+    existing.byUser[cleanKey] = cleanConfig;
+
+    const derivedSlug = hostSlug || slugifyName(cleanConfig.hostPublicName);
+    if (derivedSlug) {
+      existing.bySlug[derivedSlug] = cleanKey;
+    }
+
+    fs.writeFileSync(
+      SYNC_FILE,
+      JSON.stringify({ byUser: existing.byUser, bySlug: existing.bySlug }, null, 2),
+      'utf-8'
+    );
   } catch (e) {
     console.error('Error saving sync file:', e);
   }
@@ -250,20 +298,38 @@ export const SEED_MEETINGS = [
   }
 ];
 
-export function loadMeetings() {
+export function loadMeetings(userId = null) {
+  const cleanKey = getUserKey(userId);
   try {
     if (fs.existsSync(MEETINGS_FILE)) {
-      return JSON.parse(fs.readFileSync(MEETINGS_FILE, 'utf-8'));
+      const data = JSON.parse(fs.readFileSync(MEETINGS_FILE, 'utf-8'));
+      if (cleanKey && data && typeof data === 'object' && !Array.isArray(data) && data.byUser) {
+        return Array.isArray(data.byUser[cleanKey]) ? data.byUser[cleanKey] : [];
+      }
     }
   } catch (e) {
     console.error('Error reading meetings file:', e);
   }
-  return SEED_MEETINGS;
+  return [];
 }
 
-export function saveMeetings(meetings) {
+export function saveMeetings(meetings, userId = null) {
+  const cleanKey = getUserKey(userId);
+  if (!cleanKey) return;
   try {
-    fs.writeFileSync(MEETINGS_FILE, JSON.stringify(meetings, null, 2), 'utf-8');
+    let existing = { byUser: {} };
+    if (fs.existsSync(MEETINGS_FILE)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(MEETINGS_FILE, 'utf-8'));
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.byUser) {
+          existing.byUser = parsed.byUser;
+        }
+      } catch {
+        existing = { byUser: {} };
+      }
+    }
+    existing.byUser[cleanKey] = Array.isArray(meetings) ? meetings : [];
+    fs.writeFileSync(MEETINGS_FILE, JSON.stringify(existing, null, 2), 'utf-8');
   } catch (e) {
     console.error('Error saving meetings file:', e);
   }

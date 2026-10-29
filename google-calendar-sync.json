@@ -1,20 +1,4 @@
 {
-  "connected": true,
-  "calendarName": "Diego Racero (dracero@fi.uba.ar)",
-  "lastSync": "2026-10-28T15:42:24.422Z",
-  "autoBlock": true,
-  "icalUrl": "https://calendar.google.com/calendar/ical/c_c05817dbhsn419pmqd0dc8qeg4%40group.calendar.google.com/private-ef924465a4fe479c66f2c835e403e6e6/basic.ics",
-  "isDemo": true,
-  "events": [
-    {
-      "start": "2023-05-02T16:00:00.000Z",
-      "rawStart": "20230502T160000Z",
-      "end": "2023-05-02T17:00:00.000Z",
-      "rawEnd": "20230502T170000Z",
-      "id": "74om8c9icor38bb56lgm6b9kcphjabb1clh66b9o6os3ic1p6gqj2db164@google.com",
-      "location": "Google Meet (instrucciones en la descripción)",
-      "status": "CONFIRMED",
-      "summary": "Reunión CETEC"
-    }
-  ]
+  "byUser": {},
+  "bySlug": {}
 }

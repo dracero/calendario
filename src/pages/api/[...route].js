@@ -138,8 +138,10 @@ export const ALL = async (context) => {
     const rawScopes = getEnv('GOOGLE_SCOPES') || 'openid email profile https://www.googleapis.com/auth/calendar.events';
     const scopes = rawScopes.replace(/["']/g, '').trim().split(/\s+/).join(' ');
     const state = crypto.randomBytes(16).toString('hex');
+    const loginHint = (url.searchParams.get('login_hint') || '').trim();
+    const hintParam = loginHint ? `&login_hint=${encodeURIComponent(loginHint)}` : '';
 
-    const authUrl = `${GOOGLE_AUTH_ENDPOINT}?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scopes)}&access_type=offline&prompt=consent%20select_account&state=${state}`;
+    const authUrl = `${GOOGLE_AUTH_ENDPOINT}?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scopes)}&access_type=offline&prompt=consent%20select_account&state=${state}${hintParam}`;
 
     if (url.searchParams.get('format') === 'json') {
       return jsonResponse({ success: true, url: authUrl });
@@ -167,7 +169,6 @@ export const ALL = async (context) => {
       const clientSecret = getEnv('GOOGLE_CLIENT_SECRET');
       const redirectUri = getRedirectUri(request);
 
-
       const tokenResponse = await fetch(GOOGLE_TOKEN_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -191,13 +192,15 @@ export const ALL = async (context) => {
         headers: { Authorization: `Bearer ${tokenData.access_token}` }
       });
       const profile = await userInfoResponse.json();
+      const cleanEmail = (profile.email || '').toLowerCase().trim();
 
       const user = {
-        id: profile.sub,
+        id: cleanEmail || profile.sub,
+        googleSub: profile.sub,
         name: profile.name || profile.given_name || 'Usuario Google',
         givenName: profile.given_name || '',
         familyName: profile.family_name || '',
-        email: profile.email,
+        email: cleanEmail || profile.email,
         picture: profile.picture || null,
         locale: profile.locale || 'es',
         provider: 'google',
@@ -213,20 +216,17 @@ export const ALL = async (context) => {
         expiresAt: new Date(Date.now() + 86400000 * 30).toISOString()
       });
 
-      const syncConfig = loadSyncConfig(user.id);
-      syncConfig.connected = true;
-      syncConfig.isDemo = false;
-      syncConfig.calendarName = `${user.name} (${user.email})`;
+      // Only refresh calendar events if THIS specific user had ALREADY connected their calendar
+      const syncConfig = loadSyncConfig(user);
       syncConfig.hostPublicName = user.name;
-      syncConfig.lastSync = new Date().toISOString();
-
-      if (user.hasCalendarScope && tokenData.access_token) {
-        const apiResult = await fetchGoogleCalendarApiEvents(tokenData.access_token, tokenData.refresh_token);
+      if (syncConfig.connected && syncConfig.syncMode === 'google_oauth' && tokenData.access_token) {
+        const apiResult = await fetchGoogleCalendarApiEvents(tokenData.access_token, tokenData.refreshToken);
         if (apiResult.ok) {
           syncConfig.events = apiResult.events;
+          syncConfig.lastSync = new Date().toISOString();
         }
+        saveSyncConfig(syncConfig, user);
       }
-      saveSyncConfig(syncConfig, user.id);
 
       const isHttps = url.protocol === 'https:';
       return redirectResponse('/?login=success#meeting_types', {}, buildAuthCookies(sessionToken, isHttps));
@@ -236,15 +236,60 @@ export const ALL = async (context) => {
     }
   }
 
+  // --- Auth: Email Registration / Login (Unique Per User) ---
+  if ((pathname === '/api/auth/email-login' || pathname === '/api/auth/register') && method === 'POST') {
+    const body = await readRequestBody(request);
+    const rawEmail = String(body.email || '').toLowerCase().trim();
+    if (!rawEmail || !rawEmail.includes('@')) {
+      return jsonResponse({ success: false, error: 'Ingresa un correo electrónico válido.' }, 400);
+    }
+
+    const emailPrefix = rawEmail.split('@')[0].replace(/[._-]+/g, ' ');
+    const defaultDerivedName = emailPrefix
+      .split(' ')
+      .filter(Boolean)
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ') || 'Usuario';
+
+    const rawName = String(body.name || '').replace(/calendly/gi, 'Reuniones').trim() || defaultDerivedName;
+
+    const user = {
+      id: rawEmail,
+      name: rawName,
+      givenName: rawName.split(' ')[0] || rawName,
+      familyName: rawName.split(' ').slice(1).join(' ') || '',
+      email: rawEmail,
+      picture: null,
+      locale: 'es',
+      provider: 'email',
+      isDemo: false,
+      hasCalendarScope: false,
+      loggedInAt: new Date().toISOString()
+    };
+
+    const sessionToken = signSession({
+      user,
+      accessToken: null,
+      expiresAt: new Date(Date.now() + 86400000 * 30).toISOString()
+    });
+
+    const isHttps = url.protocol === 'https:';
+    return jsonResponse({
+      success: true,
+      message: `Sesión iniciada como ${user.name} (${user.email})`,
+      user
+    }, 200, {}, buildAuthCookies(sessionToken, isHttps));
+  }
+
   // --- Auth: Demo Google Login ---
   if (pathname === '/api/auth/demo-login' && method === 'POST') {
     const body = await readRequestBody(request);
     const rawDemoName = body.name || 'Alex Reuniones';
     const demoName = String(rawDemoName).replace(/calendly/gi, 'Reuniones').trim() || 'Alex Reuniones';
-    const demoEmail = body.email || 'alex.usuario@gmail.com';
+    const demoEmail = String(body.email || 'alex.usuario@gmail.com').toLowerCase().trim();
 
     const user = {
-      id: 'google-demo-user-' + Date.now(),
+      id: demoEmail,
       name: demoName,
       givenName: demoName.split(' ')[0],
       familyName: demoName.split(' ').slice(1).join(' '),
@@ -263,21 +308,10 @@ export const ALL = async (context) => {
       expiresAt: new Date(Date.now() + 86400000 * 30).toISOString()
     });
 
-    const syncConfig = loadSyncConfig(user.id);
-    syncConfig.connected = true;
-    syncConfig.calendarName = `${user.name} (Google Calendar Demo)`;
-    syncConfig.hostPublicName = user.name;
-    syncConfig.lastSync = new Date().toISOString();
-    syncConfig.isDemo = true;
-    if (!syncConfig.events || syncConfig.events.length === 0) {
-      syncConfig.events = generateDemoEvents();
-    }
-    saveSyncConfig(syncConfig, user.id);
-
     const isHttps = url.protocol === 'https:';
     return jsonResponse({
       success: true,
-      message: 'Sesión iniciada con éxito (Cuenta Google Demo)',
+      message: 'Sesión iniciada con éxito (Cuenta Demo)',
       user
     }, 200, {}, buildAuthCookies(sessionToken, isHttps));
   }
@@ -295,13 +329,14 @@ export const ALL = async (context) => {
       if (parts.length < 2) throw new Error('Formato JWT inválido');
       const payloadBase64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
       const payload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf-8'));
+      const cleanEmail = (payload.email || '').toLowerCase().trim();
 
       const user = {
-        id: payload.sub,
+        id: cleanEmail || payload.sub,
         name: payload.name || 'Usuario Google',
         givenName: payload.given_name || '',
         familyName: payload.family_name || '',
-        email: payload.email,
+        email: cleanEmail || payload.email,
         picture: payload.picture || null,
         locale: payload.locale || 'es',
         provider: 'google',
@@ -331,15 +366,18 @@ export const ALL = async (context) => {
   if (pathname === '/api/calendar/status' && method === 'GET') {
     const sessionData = getSessionData(request);
     const user = sessionData?.user || null;
-    const config = loadSyncConfig(user?.id || null);
+    const requestedSlug = (url.searchParams.get('slug') || '').trim();
+    const config = loadSyncConfig(user, requestedSlug || null);
 
     // If unauthenticated browser, never expose another user's private calendarName/email
     if (!user) {
-      const publicBusyEvents = (config.events || []).slice(0, 100).map(ev => ({
-        start: ev.start,
-        end: ev.end,
-        status: ev.status || 'CONFIRMED'
-      }));
+      const publicBusyEvents = config.connected
+        ? (config.events || []).slice(0, 100).map(ev => ({
+            start: ev.start,
+            end: ev.end,
+            status: ev.status || 'CONFIRMED'
+          }))
+        : [];
       const cleanHostName = config.hostPublicName
         ? String(config.hostPublicName).replace(/calendly/gi, 'Reuniones').trim()
         : null;
@@ -356,22 +394,10 @@ export const ALL = async (context) => {
       });
     }
 
-    // If authenticated with Google and /tmp was reset on a serverless cold start, restore connected state
-    const isConnected = config.connected !== undefined ? !!config.connected : !!(user.hasCalendarScope || user.provider === 'google');
-    const calendarName = config.calendarName || (isConnected ? `${user.name} (${user.email})` : null);
-    let events = Array.isArray(config.events) ? config.events : [];
-
-    if (isConnected && events.length === 0 && sessionData?.accessToken && !user.isDemo && !config.isDemo) {
-      const apiResult = await fetchGoogleCalendarApiEvents(sessionData.accessToken, sessionData.refreshToken);
-      if (apiResult.ok && apiResult.events.length > 0) {
-        events = apiResult.events;
-        config.connected = true;
-        config.calendarName = calendarName;
-        config.events = events;
-        config.lastSync = new Date().toISOString();
-        saveSyncConfig(config, user.id);
-      }
-    }
+    // Strictly per-user connection status: NEVER auto-connect unless THIS user explicitly connected their calendar
+    const isConnected = !!config.connected;
+    const calendarName = isConnected ? (config.calendarName || `${user.name} (${user.email})`) : null;
+    const events = isConnected && Array.isArray(config.events) ? config.events : [];
 
     const cleanAuthHostName = (config.hostPublicName || user.name || '')
       .replace(/calendly/gi, 'Reuniones')
@@ -379,40 +405,106 @@ export const ALL = async (context) => {
 
     return jsonResponse({
       success: true,
+      userKey: user.email || user.id,
       connected: isConnected,
+      syncMode: config.syncMode || (config.isDemo ? 'demo' : (config.icalUrl ? 'ical' : null)),
       calendarName,
       hostPublicName: cleanAuthHostName || user.name,
-      icalUrl: config.icalUrl || '',
-      lastSync: config.lastSync || new Date().toISOString(),
+      icalUrl: isConnected ? (config.icalUrl || '') : '',
+      lastSync: isConnected ? config.lastSync : null,
       autoBlock: config.autoBlock !== false,
       eventCount: events.length,
       events: events.slice(0, 100),
-      isDemo: !!(config.isDemo || user.isDemo)
+      isDemo: !!(isConnected && config.isDemo)
     });
   }
 
-  // --- Calendar: Connect ---
+  // --- Calendar: Connect (Strictly Per Authenticated User) ---
   if (pathname === '/api/calendar/connect' && method === 'POST') {
-    const user = getSessionUser(request);
-    const body = await readRequestBody(request);
-    const { icalUrl, autoBlock, isDemo } = body;
+    const sessionData = getSessionData(request);
+    const user = sessionData?.user || null;
+    if (!user) {
+      return jsonResponse({ success: false, error: 'Debes iniciar sesión con tu cuenta antes de conectar un calendario.' }, 401);
+    }
 
+    const body = await readRequestBody(request);
+    const { icalUrl, autoBlock, isDemo, useGoogleOAuth } = body;
+
+    // Mode 1: Connect using the current user's Google OAuth account
+    if (useGoogleOAuth) {
+      if (!sessionData?.accessToken || user.provider !== 'google' || user.isDemo) {
+        return jsonResponse({
+          success: false,
+          error: 'Para conectar por OAuth directo debes haber iniciado sesión con tu cuenta real de Google, o bien pega tu enlace iCal (.ics) abajo.'
+        }, 400);
+      }
+
+      const apiResult = await fetchGoogleCalendarApiEvents(sessionData.accessToken, sessionData.refreshToken);
+      let events = [];
+      let warning = null;
+
+      if (apiResult.ok) {
+        events = apiResult.events;
+      } else {
+        warning = apiResult.error;
+        if (user.email) {
+          try {
+            const pubUrl = `https://calendar.google.com/calendar/ical/${encodeURIComponent(user.email)}/public/basic.ics`;
+            const pubRes = await fetch(pubUrl, { headers: { 'User-Agent': 'Reuniones-Calendar-Sync/1.0' } });
+            if (pubRes.ok) {
+              const parsed = parseIcal(await pubRes.text());
+              events = parsed.events;
+              warning = null;
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+
+      const config = {
+        connected: true,
+        syncMode: 'google_oauth',
+        calendarName: `${user.name} (${user.email})`,
+        hostPublicName: user.name,
+        lastSync: new Date().toISOString(),
+        autoBlock: autoBlock !== false,
+        icalUrl: '',
+        isDemo: false,
+        events
+      };
+      saveSyncConfig(config, user);
+
+      return jsonResponse({
+        success: true,
+        syncMode: 'google_oauth',
+        calendarName: config.calendarName,
+        icalUrl: '',
+        count: events.length,
+        events: events.slice(0, 100),
+        warning
+      });
+    }
+
+    // Mode 2: Connect Demo Calendar for this user
     if (isDemo) {
       const demoEvents = generateDemoEvents();
       const config = {
         connected: true,
-        calendarName: 'Google Calendar (Demo Sincronizado)',
-        hostPublicName: user?.name || null,
+        syncMode: 'demo',
+        calendarName: `${user.name} (Google Calendar Demo)`,
+        hostPublicName: user.name,
         lastSync: new Date().toISOString(),
         autoBlock: autoBlock !== false,
         icalUrl: 'demo://calendar.google.com/calendar/u/0/r',
         isDemo: true,
         events: demoEvents
       };
-      saveSyncConfig(config, user?.id || null);
+      saveSyncConfig(config, user);
       return jsonResponse({
         success: true,
-        message: 'Google Calendar sincronizado en modo demostración',
+        syncMode: 'demo',
+        message: 'Google Calendar sincronizado en modo demostración para tu usuario',
         calendarName: config.calendarName,
         icalUrl: config.icalUrl,
         count: demoEvents.length,
@@ -420,6 +512,7 @@ export const ALL = async (context) => {
       });
     }
 
+    // Mode 3: Connect via iCal (.ics) URL for this user
     if (!icalUrl || typeof icalUrl !== 'string') {
       return jsonResponse({ success: false, error: 'Debes proporcionar una URL iCal válida.' }, 400);
     }
@@ -445,17 +538,19 @@ export const ALL = async (context) => {
 
       const config = {
         connected: true,
-        calendarName: calendarName || 'Google Calendar',
-        hostPublicName: user?.name || null,
+        syncMode: 'ical',
+        calendarName: calendarName || `${user.name} (Google Calendar)`,
+        hostPublicName: user.name,
         lastSync: new Date().toISOString(),
         autoBlock: autoBlock !== false,
         icalUrl: fetchUrl,
         isDemo: false,
         events: events
       };
-      saveSyncConfig(config, user?.id || null);
+      saveSyncConfig(config, user);
       return jsonResponse({
         success: true,
+        syncMode: 'ical',
         calendarName: config.calendarName,
         icalUrl: config.icalUrl,
         count: events.length,
@@ -466,30 +561,36 @@ export const ALL = async (context) => {
     }
   }
 
-  // --- Calendar: Sync Now ---
+  // --- Calendar: Sync Now (Strictly Per Authenticated User) ---
   if (pathname === '/api/calendar/sync-now' && method === 'POST') {
     const sessionData = getSessionData(request);
     const user = sessionData?.user || null;
+    if (!user) {
+      return jsonResponse({ success: false, error: 'Debes iniciar sesión para sincronizar tu calendario.' }, 401);
+    }
+
     const body = await readRequestBody(request);
-    const config = loadSyncConfig(user?.id || null);
+    const config = loadSyncConfig(user);
 
     const effectiveIcalUrl = (body.icalUrl || config.icalUrl || '').trim();
-    const isDemoMode = !!(body.isDemo || config.isDemo || user?.isDemo || effectiveIcalUrl.startsWith('demo://'));
-    const hasOAuthConnection = !!(user && (user.hasCalendarScope || user.provider === 'google' || sessionData?.accessToken));
-    const isConnected = !!(config.connected || effectiveIcalUrl || isDemoMode || hasOAuthConnection);
+    const isDemoMode = !!(body.isDemo || config.isDemo || effectiveIcalUrl.startsWith('demo://'));
+    const isOAuthMode = !!(body.syncMode === 'google_oauth' || config.syncMode === 'google_oauth' || (config.connected && !effectiveIcalUrl && !isDemoMode && sessionData?.accessToken));
+    const isConnected = !!(config.connected || effectiveIcalUrl || isDemoMode || isOAuthMode);
 
     if (!isConnected) {
-      return jsonResponse({ success: false, error: 'No hay un calendario conectado actualmente.' }, 400);
+      return jsonResponse({ success: false, error: 'Este usuario no tiene ningún calendario conectado actualmente.' }, 400);
     }
 
     // 1. Demo Mode Sync
     if (isDemoMode) {
       config.connected = true;
+      config.syncMode = 'demo';
       config.isDemo = true;
-      config.calendarName = config.calendarName || (user ? `${user.name} (Google Calendar Demo)` : 'Google Calendar (Demo Sincronizado)');
+      config.calendarName = config.calendarName || `${user.name} (Google Calendar Demo)`;
+      config.hostPublicName = user.name;
       config.lastSync = new Date().toISOString();
       config.events = generateDemoEvents();
-      saveSyncConfig(config, user?.id || null);
+      saveSyncConfig(config, user);
       return jsonResponse({
         success: true,
         source: 'demo',
@@ -499,7 +600,7 @@ export const ALL = async (context) => {
       });
     }
 
-    // 2. Explicit iCal Feed Sync (if an http/https/webcal iCal URL is configured)
+    // 2. Explicit iCal Feed Sync
     if (effectiveIcalUrl && !effectiveIcalUrl.startsWith('demo://')) {
       let fetchUrl = effectiveIcalUrl;
       if (fetchUrl.startsWith('webcal://')) fetchUrl = 'https://' + fetchUrl.substring(9);
@@ -512,12 +613,14 @@ export const ALL = async (context) => {
         const icalContent = await response.text();
         const { calendarName, events } = parseIcal(icalContent);
         config.connected = true;
+        config.syncMode = 'ical';
         config.isDemo = false;
         config.icalUrl = fetchUrl;
-        config.calendarName = calendarName || config.calendarName || 'Google Calendar';
+        config.calendarName = calendarName || config.calendarName || `${user.name} (Google Calendar)`;
+        config.hostPublicName = user.name;
         config.lastSync = new Date().toISOString();
         config.events = events;
-        saveSyncConfig(config, user?.id || null);
+        saveSyncConfig(config, user);
         return jsonResponse({
           success: true,
           source: 'ical',
@@ -530,11 +633,10 @@ export const ALL = async (context) => {
       }
     }
 
-    // 3. Google OAuth API Sync (when logged in with Google OAuth)
-    if (sessionData?.accessToken) {
+    // 3. Google OAuth API Sync (when this user connected via Google OAuth)
+    if (sessionData?.accessToken && !user.isDemo) {
       const apiResult = await fetchGoogleCalendarApiEvents(sessionData.accessToken, sessionData.refreshToken);
 
-      // Update session cookie if token was refreshed
       const updatedCookies = [];
       if (apiResult.newAccessToken) {
         const newSessionToken = signSession({
@@ -548,12 +650,13 @@ export const ALL = async (context) => {
 
       if (apiResult.ok) {
         config.connected = true;
+        config.syncMode = 'google_oauth';
         config.isDemo = false;
         config.calendarName = config.calendarName || `${user.name} (${user.email})`;
-        config.hostPublicName = config.hostPublicName || user.name;
+        config.hostPublicName = user.name;
         config.lastSync = new Date().toISOString();
         config.events = apiResult.events;
-        saveSyncConfig(config, user.id);
+        saveSyncConfig(config, user);
 
         return jsonResponse({
           success: true,
@@ -564,8 +667,8 @@ export const ALL = async (context) => {
         }, 200, {}, updatedCookies);
       }
 
-      // Fallback 3a: Try public iCal URL for the user's Google email if Calendar API returned 403/404
-      if (user?.email) {
+      // Fallback 3a: Try public iCal URL for this user's Google email
+      if (user.email) {
         try {
           const publicIcalUrl = `https://calendar.google.com/calendar/ical/${encodeURIComponent(user.email)}/public/basic.ics`;
           const pubRes = await fetch(publicIcalUrl, {
@@ -575,11 +678,13 @@ export const ALL = async (context) => {
             const icalContent = await pubRes.text();
             const { events } = parseIcal(icalContent);
             config.connected = true;
+            config.syncMode = 'google_oauth';
             config.isDemo = false;
             config.calendarName = config.calendarName || `${user.name} (${user.email})`;
+            config.hostPublicName = user.name;
             config.lastSync = new Date().toISOString();
             config.events = events;
-            saveSyncConfig(config, user.id);
+            saveSyncConfig(config, user);
 
             return jsonResponse({
               success: true,
@@ -590,12 +695,12 @@ export const ALL = async (context) => {
             }, 200, {}, updatedCookies);
           }
         } catch {
-          // ignore public iCal fallback error
+          // ignore
         }
       }
 
-      // Fallback 3b: Sync with scheduled internal meetings so sync still completes cleanly and reports helpful guidance
-      const meetings = loadMeetings().filter(m => m.status === 'upcoming');
+      // Fallback 3b: Sync with this user's scheduled internal meetings
+      const meetings = loadMeetings(user).filter(m => m.status === 'upcoming');
       const fallbackEvents = meetings.map((m, idx) => {
         const startObj = new Date(m.dateTime);
         const endObj = new Date(startObj.getTime() + (m.duration || 30) * 60000);
@@ -610,12 +715,12 @@ export const ALL = async (context) => {
       });
 
       config.connected = true;
-      config.calendarName = config.calendarName || `${user?.name || 'Usuario'} (${user?.email || 'Google Calendar'})`;
+      config.syncMode = 'google_oauth';
+      config.calendarName = config.calendarName || `${user.name} (${user.email})`;
+      config.hostPublicName = user.name;
       config.lastSync = new Date().toISOString();
-      if (!config.events || config.events.length === 0) {
-        config.events = fallbackEvents;
-      }
-      saveSyncConfig(config, user?.id || null);
+      config.events = fallbackEvents;
+      saveSyncConfig(config, user);
 
       return jsonResponse({
         success: true,
@@ -629,37 +734,46 @@ export const ALL = async (context) => {
 
     return jsonResponse({
       success: false,
-      error: 'Conecta tu enlace iCal o vuelve a iniciar sesión con Google para sincronizar eventos.'
+      error: 'Conecta primero el calendario para este usuario.'
     }, 400);
   }
 
-  // --- Calendar: Disconnect ---
+  // --- Calendar: Disconnect (Strictly Per Authenticated User) ---
   if (pathname === '/api/calendar/disconnect' && method === 'POST') {
     const user = getSessionUser(request);
-    const config = {
-      connected: false,
-      calendarName: null,
-      lastSync: null,
-      autoBlock: true,
-      icalUrl: '',
-      isDemo: false,
-      events: []
-    };
-    saveSyncConfig(config, user?.id || null);
-    return jsonResponse({ success: true, message: 'Google Calendar desconectado.' });
+    if (user) {
+      const config = {
+        connected: false,
+        syncMode: null,
+        calendarName: null,
+        hostPublicName: user.name,
+        lastSync: null,
+        autoBlock: true,
+        icalUrl: '',
+        isDemo: false,
+        events: []
+      };
+      saveSyncConfig(config, user);
+    }
+    return jsonResponse({ success: true, message: 'Google Calendar desconectado para tu usuario.' });
   }
 
-  // --- Calendar: Sync Meetings ---
+  // --- Calendar: Sync Meetings (Strictly Per Authenticated User) ---
   if (pathname === '/api/calendar/sync-meetings' && method === 'POST') {
+    const user = getSessionUser(request);
     const body = await readRequestBody(request);
     const meetings = Array.isArray(body.meetings) ? body.meetings : [];
-    saveMeetings(meetings);
+    if (user) {
+      saveMeetings(meetings, user);
+    }
     return jsonResponse({ success: true, count: meetings.length });
   }
 
   // --- Calendar: Feed ICS ---
   if (pathname === '/api/calendar/feed.ics' || pathname === '/feed.ics') {
-    const meetings = loadMeetings();
+    const user = getSessionUser(request);
+    const queryUser = url.searchParams.get('user') || null;
+    const meetings = loadMeetings(user || queryUser);
     const icsContent = generateIcsFeed(meetings);
     return new Response(icsContent, {
       status: 200,
