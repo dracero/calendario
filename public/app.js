@@ -2133,9 +2133,10 @@
           connected: !!data.connected,
           calendarName: data.calendarName || null,
           hostPublicName: data.hostPublicName || null,
+          icalUrl: data.icalUrl || state.googleCalendar.icalUrl || '',
           lastSync: data.lastSync,
           autoBlock: data.autoBlock !== false,
-          eventCount: data.eventCount || 0,
+          eventCount: data.eventCount || (data.events || []).length,
           events: data.events || [],
           isDemo: !!data.isDemo
         };
@@ -2160,9 +2161,13 @@
     // Availability view card
     const availBadge = document.getElementById('avail-gcal-status-badge');
     const availDesc = document.getElementById('avail-gcal-desc');
+    const availSyncBtn = document.getElementById('btn-avail-sync-now');
     if (availBadge) {
       availBadge.className = `status-pill-badge ${isConn ? 'connected' : 'disconnected'}`;
       availBadge.textContent = isConn ? 'Sincronizado' : 'Desconectado';
+    }
+    if (availSyncBtn) {
+      availSyncBtn.style.display = isConn ? 'inline-flex' : 'none';
     }
     if (availDesc) {
       if (isConn) {
@@ -2215,6 +2220,8 @@
       showToast('Conectando a Google Calendar...', '⏳');
       const res = await fetch('/api/calendar/connect', {
         method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ icalUrl, autoBlock, isDemo })
       });
@@ -2231,6 +2238,8 @@
       state.googleCalendar = {
         connected: true,
         calendarName: data.calendarName,
+        hostPublicName: state.googleCalendar.hostPublicName || null,
+        icalUrl: data.icalUrl || icalUrl || '',
         lastSync: new Date().toISOString(),
         autoBlock: autoBlock,
         eventCount: data.count || (data.events || []).length,
@@ -2239,7 +2248,10 @@
       };
       updateGoogleCalendarUI();
       showToast(`¡Conectado exitosamente con ${data.calendarName}!`, '🎉');
-      if (state.selectedDate) renderTimeSlots();
+      if (state.selectedDate) {
+        renderTimeSlots();
+        renderPublicTimeSlots();
+      }
       return true;
     } catch (err) {
       showToast('Error de red al conectar', '⚠️');
@@ -2248,41 +2260,95 @@
   }
 
   async function syncGoogleCalendarNow() {
+    const syncBtn = document.getElementById('btn-gcal-sync-now');
+    const availSyncBtn = document.getElementById('btn-avail-sync-now');
+    if (syncBtn) {
+      syncBtn.disabled = true;
+      syncBtn.textContent = '↻ Sincronizando...';
+    }
+    if (availSyncBtn) {
+      availSyncBtn.disabled = true;
+      availSyncBtn.textContent = '↻ Sincronizando...';
+    }
+
     try {
-      showToast('Sincronizando eventos...', '↻');
-      const res = await fetch('/api/calendar/sync-now', { method: 'POST' });
+      showToast('Sincronizando eventos con Google Calendar...', '↻');
+      // Also make sure local scheduled meetings are pushed to server before syncing
+      await syncMeetingsToServer();
+
+      const urlInput = document.getElementById('input-gcal-ical-url');
+      const inputIcal = urlInput && urlInput.value ? urlInput.value.trim() : '';
+
+      const res = await fetch('/api/calendar/sync-now', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          icalUrl: inputIcal || state.googleCalendar.icalUrl || '',
+          isDemo: !!state.googleCalendar.isDemo
+        })
+      });
       const data = await res.json();
-      if (data.success) {
-        state.googleCalendar.events = data.events;
-        state.googleCalendar.eventCount = data.count;
+      if (res.ok && data.success) {
+        const events = Array.isArray(data.events) ? data.events : [];
+        state.googleCalendar.connected = true;
+        if (data.calendarName) state.googleCalendar.calendarName = data.calendarName;
+        state.googleCalendar.events = events;
+        state.googleCalendar.eventCount = typeof data.count === 'number' ? data.count : events.length;
         state.googleCalendar.lastSync = new Date().toISOString();
         updateGoogleCalendarUI();
-        if (state.selectedDate) renderTimeSlots();
-        showToast('Google Calendar sincronizado al día', '✓');
+        if (state.selectedDate) {
+          renderTimeSlots();
+          renderPublicTimeSlots();
+        }
+        if (data.warning && data.source === 'local_fallback') {
+          showToast(`Sincronizado (${state.googleCalendar.eventCount} eventos). Nota: habilita Google Calendar API en Google Cloud Console o usa el enlace iCal para leer eventos privados externos.`, 'ℹ️');
+        } else {
+          showToast(`Google Calendar sincronizado al día (${state.googleCalendar.eventCount} eventos activos)`, '✓');
+        }
       } else {
         showToast(data.error || 'Error al sincronizar', '⚠️');
       }
     } catch (e) {
-      showToast('Error al actualizar calendario', '⚠️');
+      showToast('Error al actualizar calendario: ' + e.message, '⚠️');
+    } finally {
+      if (syncBtn) {
+        syncBtn.disabled = false;
+        syncBtn.textContent = '↻ Sincronizar ahora';
+      }
+      if (availSyncBtn) {
+        availSyncBtn.disabled = false;
+        availSyncBtn.textContent = '↻ Sincronizar eventos';
+      }
     }
   }
 
   async function disconnectGoogleCalendar() {
     if (!confirm('¿Deseas desconectar Google Calendar? Los horarios ocupados ya no se bloquearán.')) return;
     try {
-      const res = await fetch('/api/calendar/disconnect', { method: 'POST' });
+      const res = await fetch('/api/calendar/disconnect', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store'
+      });
       const data = await res.json();
       if (data.success) {
         state.googleCalendar = {
           connected: false,
           calendarName: null,
+          icalUrl: '',
           lastSync: null,
           autoBlock: true,
+          eventCount: 0,
           events: [],
           isDemo: false
         };
         updateGoogleCalendarUI();
-        if (state.selectedDate) renderTimeSlots();
+        if (state.selectedDate) {
+          renderTimeSlots();
+          renderPublicTimeSlots();
+        }
         showToast('Google Calendar desconectado', 'ℹ️');
       }
     } catch (e) {
@@ -2343,6 +2409,9 @@
 
   const syncNowBtn = document.getElementById('btn-gcal-sync-now');
   if (syncNowBtn) syncNowBtn.addEventListener('click', syncGoogleCalendarNow);
+
+  const availSyncNowBtn = document.getElementById('btn-avail-sync-now');
+  if (availSyncNowBtn) availSyncNowBtn.addEventListener('click', syncGoogleCalendarNow);
 
   const disconnectBtn = document.getElementById('btn-gcal-disconnect');
   if (disconnectBtn) disconnectBtn.addEventListener('click', disconnectGoogleCalendar);

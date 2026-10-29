@@ -97,12 +97,16 @@ export function parseCookies(cookieHeader) {
   return list;
 }
 
-export function getSessionUser(request) {
+export function getSessionData(request) {
   const cookieHeader = request.headers.get('cookie') || '';
   const cookies = parseCookies(cookieHeader);
   const token = cookies.reuniones_session;
   if (!token) return null;
-  const sessionData = verifySession(token);
+  return verifySession(token);
+}
+
+export function getSessionUser(request) {
+  const sessionData = getSessionData(request);
   return sessionData?.user || null;
 }
 
@@ -374,6 +378,119 @@ export function generateDemoEvents() {
       status: 'CONFIRMED'
     }
   ];
+}
+
+export async function refreshGoogleAccessToken(refreshToken) {
+  if (!refreshToken) return null;
+  try {
+    const clientId = getEnv('GOOGLE_CLIENT_ID');
+    const clientSecret = getEnv('GOOGLE_CLIENT_SECRET');
+    if (!clientId || !clientSecret) return null;
+
+    const res = await fetch(GOOGLE_TOKEN_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+        grant_type: 'refresh_token'
+      }).toString()
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.access_token || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchGoogleCalendarApiEvents(accessToken, refreshToken = null) {
+  if (!accessToken || accessToken.startsWith('demo_token_')) {
+    return { ok: false, events: [], error: 'No OAuth access token available' };
+  }
+
+  const now = new Date();
+  const timeMin = new Date(now.getTime() - 86400000).toISOString(); // From 24h ago
+  const timeMax = new Date(now.getTime() + 86400000 * 60).toISOString(); // Next 60 days
+
+  const buildUrl = () => {
+    const params = new URLSearchParams({
+      timeMin,
+      timeMax,
+      singleEvents: 'true',
+      orderBy: 'startTime',
+      maxResults: '150'
+    });
+    return `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params.toString()}`;
+  };
+
+  let currentToken = accessToken;
+  let refreshedToken = null;
+
+  try {
+    let response = await fetch(buildUrl(), {
+      headers: { Authorization: `Bearer ${currentToken}` }
+    });
+
+    if (response.status === 401 && refreshToken) {
+      refreshedToken = await refreshGoogleAccessToken(refreshToken);
+      if (refreshedToken) {
+        currentToken = refreshedToken;
+        response = await fetch(buildUrl(), {
+          headers: { Authorization: `Bearer ${currentToken}` }
+        });
+      }
+    }
+
+    if (!response.ok) {
+      const errBody = await response.json().catch(() => ({}));
+      const errMsg = errBody?.error?.message || `Google Calendar API HTTP ${response.status}`;
+      return {
+        ok: false,
+        status: response.status,
+        events: [],
+        error: errMsg,
+        newAccessToken: refreshedToken
+      };
+    }
+
+    const data = await response.json();
+    const items = Array.isArray(data.items) ? data.items : [];
+
+    const events = items
+      .filter(item => {
+        if (!item || item.status === 'cancelled') return false;
+        if (item.transparency === 'transparent') return false; // Free / non-blocking event
+        return !!(item.start?.dateTime || item.start?.date);
+      })
+      .map((item, idx) => {
+        const startIso = item.start.dateTime || `${item.start.date}T00:00:00`;
+        const endIso = item.end?.dateTime || (item.end?.date ? `${item.end.date}T23:59:59` : startIso);
+        return {
+          id: item.id || `gcal-oauth-${idx}`,
+          summary: item.summary || 'Ocupado (Google Calendar)',
+          start: startIso,
+          end: endIso,
+          location: item.location || item.hangoutLink || 'Google Calendar',
+          status: (item.status || 'CONFIRMED').toUpperCase()
+        };
+      });
+
+    return {
+      ok: true,
+      calendarSummary: data.summary || null,
+      events,
+      newAccessToken: refreshedToken
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      events: [],
+      error: err.message || 'Error consultando Google Calendar API',
+      newAccessToken: refreshedToken
+    };
+  }
 }
 
 export function generateIcsFeed(meetings = []) {

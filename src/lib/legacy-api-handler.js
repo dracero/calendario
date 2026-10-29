@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { fetchGoogleCalendarApiEvents } from './server-utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -147,11 +148,15 @@ function verifySession(token) {
   }
 }
 
-function getSessionUser(req) {
+function getSessionData(req) {
   const cookies = parseCookies(req);
   const token = cookies.reuniones_session;
   if (!token) return null;
-  const sessionData = verifySession(token);
+  return verifySession(token);
+}
+
+function getSessionUser(req) {
+  const sessionData = getSessionData(req);
   return sessionData?.user || null;
 }
 
@@ -802,35 +807,105 @@ export default async function handler(req, res) {
 
   // --- Calendar: Sync Now ---
   if (pathname === '/api/calendar/sync-now' && req.method === 'POST') {
+    const sessionData = getSessionData(req);
+    const user = sessionData?.user || null;
+    const body = await readBody(req);
     const config = loadSyncConfig();
-    if (!config.connected) {
+
+    const effectiveIcalUrl = (body.icalUrl || config.icalUrl || '').trim();
+    const isDemoMode = !!(body.isDemo || config.isDemo || user?.isDemo || effectiveIcalUrl.startsWith('demo://'));
+    const hasOAuthConnection = !!(user && (user.hasCalendarScope || user.provider === 'google' || sessionData?.accessToken));
+    const isConnected = !!(config.connected || effectiveIcalUrl || isDemoMode || hasOAuthConnection);
+
+    if (!isConnected) {
       sendJson(res, 400, { success: false, error: 'No hay un calendario conectado actualmente.' });
       return;
     }
 
-    if (config.isDemo) {
+    if (isDemoMode) {
+      config.connected = true;
+      config.isDemo = true;
       config.lastSync = new Date().toISOString();
       config.events = generateDemoEvents();
       saveSyncConfig(config);
-      sendJson(res, 200, { success: true, count: config.events.length, events: config.events });
+      sendJson(res, 200, { success: true, calendarName: config.calendarName, count: config.events.length, events: config.events });
       return;
     }
 
-    try {
-      const response = await fetch(config.icalUrl, {
-        headers: { 'User-Agent': 'Reuniones-Calendar-Sync/1.0' }
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const icalContent = await response.text();
-      const { calendarName, events } = parseIcal(icalContent);
-      config.calendarName = calendarName || config.calendarName;
-      config.lastSync = new Date().toISOString();
-      config.events = events;
-      saveSyncConfig(config);
-      sendJson(res, 200, { success: true, count: events.length, events: events.slice(0, 100) });
-    } catch (err) {
-      sendJson(res, 500, { success: false, error: `Error: ${err.message}` });
+    if (effectiveIcalUrl && !effectiveIcalUrl.startsWith('demo://')) {
+      let fetchUrl = effectiveIcalUrl;
+      if (fetchUrl.startsWith('webcal://')) fetchUrl = 'https://' + fetchUrl.substring(9);
+      try {
+        const response = await fetch(fetchUrl, {
+          headers: { 'User-Agent': 'Reuniones-Calendar-Sync/1.0' }
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const icalContent = await response.text();
+        const { calendarName, events } = parseIcal(icalContent);
+        config.connected = true;
+        config.isDemo = false;
+        config.icalUrl = fetchUrl;
+        config.calendarName = calendarName || config.calendarName;
+        config.lastSync = new Date().toISOString();
+        config.events = events;
+        saveSyncConfig(config);
+        sendJson(res, 200, { success: true, calendarName: config.calendarName, count: events.length, events: events.slice(0, 100) });
+      } catch (err) {
+        sendJson(res, 500, { success: false, error: `Error: ${err.message}` });
+      }
+      return;
     }
+
+    if (sessionData?.accessToken) {
+      const apiResult = await fetchGoogleCalendarApiEvents(sessionData.accessToken, sessionData.refreshToken);
+      if (apiResult.ok) {
+        config.connected = true;
+        config.isDemo = false;
+        config.calendarName = config.calendarName || `${user.name} (${user.email})`;
+        config.lastSync = new Date().toISOString();
+        config.events = apiResult.events;
+        saveSyncConfig(config);
+        sendJson(res, 200, {
+          success: true,
+          source: 'google_oauth',
+          calendarName: config.calendarName,
+          count: apiResult.events.length,
+          events: apiResult.events.slice(0, 100)
+        });
+        return;
+      }
+
+      const meetings = loadMeetings().filter(m => m.status === 'upcoming');
+      const fallbackEvents = meetings.map((m, idx) => {
+        const startObj = new Date(m.dateTime);
+        const endObj = new Date(startObj.getTime() + (m.duration || 30) * 60000);
+        return {
+          id: m.id || `local-meet-${idx}`,
+          summary: `${m.eventTitle || 'Reunión'} con ${m.inviteeName || 'Invitado'}`,
+          start: startObj.toISOString(),
+          end: endObj.toISOString(),
+          location: m.location || 'Google Meet',
+          status: 'CONFIRMED'
+        };
+      });
+      config.connected = true;
+      config.lastSync = new Date().toISOString();
+      if (!config.events || config.events.length === 0) {
+        config.events = fallbackEvents;
+      }
+      saveSyncConfig(config);
+      sendJson(res, 200, {
+        success: true,
+        source: 'local_fallback',
+        calendarName: config.calendarName,
+        count: config.events.length,
+        events: config.events.slice(0, 100),
+        warning: apiResult.error
+      });
+      return;
+    }
+
+    sendJson(res, 400, { success: false, error: 'Conecta tu enlace iCal o vuelve a iniciar sesión con Google.' });
     return;
   }
 
