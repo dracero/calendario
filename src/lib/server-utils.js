@@ -447,13 +447,24 @@ export const SEED_MEETINGS = [
   }
 ];
 
-export function loadMeetings(userId = null) {
+export function loadMeetings(userId = null, hostSlug = null) {
   const cleanKey = getUserKey(userId);
+  const derivedSlug = hostSlug || (typeof userId === 'object' && userId?.name ? slugifyName(userId.name) : null);
   try {
     if (fs.existsSync(MEETINGS_FILE)) {
       const data = JSON.parse(fs.readFileSync(MEETINGS_FILE, 'utf-8'));
-      if (cleanKey && data && typeof data === 'object' && !Array.isArray(data) && data.byUser) {
-        return Array.isArray(data.byUser[cleanKey]) ? data.byUser[cleanKey] : [];
+      if (data && typeof data === 'object' && !Array.isArray(data)) {
+        const byUser = data.byUser || {};
+        const bySlug = data.bySlug || {};
+        const userList = (cleanKey && Array.isArray(byUser[cleanKey])) ? byUser[cleanKey] : [];
+        const slugList = (derivedSlug && Array.isArray(bySlug[derivedSlug])) ? bySlug[derivedSlug] : [];
+        const merged = [...userList];
+        for (const m of slugList) {
+          if (m && m.id && !merged.some(existing => existing.id === m.id)) {
+            merged.push(m);
+          }
+        }
+        return merged;
       }
     }
   } catch (e) {
@@ -462,26 +473,52 @@ export function loadMeetings(userId = null) {
   return [];
 }
 
-export function saveMeetings(meetings, userId = null) {
+export function saveMeetings(meetings, userId = null, hostSlug = null) {
   const cleanKey = getUserKey(userId);
-  if (!cleanKey) return;
+  const derivedSlug = hostSlug || (typeof userId === 'object' && userId?.name ? slugifyName(userId.name) : null);
+  if (!cleanKey && !derivedSlug) return;
   try {
-    let existing = { byUser: {} };
+    let existing = { byUser: {}, bySlug: {} };
     if (fs.existsSync(MEETINGS_FILE)) {
       try {
         const parsed = JSON.parse(fs.readFileSync(MEETINGS_FILE, 'utf-8'));
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.byUser) {
-          existing.byUser = parsed.byUser;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          existing.byUser = parsed.byUser || {};
+          existing.bySlug = parsed.bySlug || {};
         }
       } catch {
-        existing = { byUser: {} };
+        existing = { byUser: {}, bySlug: {} };
       }
     }
-    existing.byUser[cleanKey] = Array.isArray(meetings) ? meetings : [];
+    const list = Array.isArray(meetings) ? meetings : [];
+    if (cleanKey) existing.byUser[cleanKey] = list;
+    if (derivedSlug) existing.bySlug[derivedSlug] = list;
     fs.writeFileSync(MEETINGS_FILE, JSON.stringify(existing, null, 2), 'utf-8');
   } catch (e) {
     console.error('Error saving meetings file:', e);
   }
+}
+
+export function mergeMeetingsIntoEvents(events = [], meetings = []) {
+  const result = Array.isArray(events) ? [...events] : [];
+  const upcoming = (Array.isArray(meetings) ? meetings : []).filter(m => m && m.status === 'upcoming' && m.dateTime);
+  for (const m of upcoming) {
+    const exists = result.some(ev => ev && (ev.id === m.id || (ev.start && new Date(ev.start).getTime() === new Date(m.dateTime).getTime())));
+    if (!exists) {
+      const startObj = new Date(m.dateTime);
+      const endObj = new Date(startObj.getTime() + (Number(m.duration) || 30) * 60000);
+      result.push({
+        id: m.id,
+        summary: `${m.eventTitle || 'Reunión'} con ${m.inviteeName || 'Invitado'}`,
+        start: startObj.toISOString(),
+        end: endObj.toISOString(),
+        location: m.locationUrl || m.location || 'Google Meet',
+        status: 'CONFIRMED'
+      });
+    }
+  }
+  result.sort((a, b) => new Date(a.start) - new Date(b.start));
+  return result;
 }
 
 export function parseIcalDate(dStr) {
@@ -788,13 +825,40 @@ export async function createGoogleCalendarEvent(accessToken, refreshToken = null
     }
   };
 
+  const baseEventBodyNoAttendees = {
+    summary,
+    description,
+    location,
+    start: {
+      dateTime: startDateTimeStr,
+      timeZone: tz
+    },
+    end: {
+      dateTime: endDateTimeStr,
+      timeZone: tz
+    },
+    reminders: {
+      useDefault: false,
+      overrides: [
+        { method: 'email', minutes: 60 },
+        { method: 'popup', minutes: 10 }
+      ]
+    }
+  };
+
   let currentToken = accessToken;
   let refreshedToken = null;
 
-  const postEvent = async (token, withConference = true) => {
-    const query = withConference
-      ? 'conferenceDataVersion=1&sendUpdates=all'
-      : 'sendUpdates=all';
+  const postEvent = async (token, mode = 'full') => {
+    let query = 'conferenceDataVersion=1&sendUpdates=all';
+    let payload = eventBodyWithMeet;
+    if (mode === 'no_conference') {
+      query = 'sendUpdates=all';
+      payload = baseEventBody;
+    } else if (mode === 'basic') {
+      query = 'sendUpdates=none';
+      payload = baseEventBodyNoAttendees;
+    }
     const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?${query}`;
     return fetch(url, {
       method: 'POST',
@@ -802,24 +866,29 @@ export async function createGoogleCalendarEvent(accessToken, refreshToken = null
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(withConference ? eventBodyWithMeet : baseEventBody)
+      body: JSON.stringify(payload)
     });
   };
 
   try {
-    let response = await postEvent(currentToken, true);
+    let response = await postEvent(currentToken, 'full');
 
     if (response.status === 401 && refreshToken) {
       refreshedToken = await refreshGoogleAccessToken(refreshToken);
       if (refreshedToken) {
         currentToken = refreshedToken;
-        response = await postEvent(currentToken, true);
+        response = await postEvent(currentToken, 'full');
       }
     }
 
     // If conferenceData creation is rejected by the account type, retry without conferenceData
-    if (!response.ok && response.status === 400) {
-      response = await postEvent(currentToken, false);
+    if (!response.ok && (response.status === 400 || response.status === 403)) {
+      response = await postEvent(currentToken, 'no_conference');
+    }
+
+    // If attendees/sendUpdates=all is restricted on the account, retry basic event creation
+    if (!response.ok && (response.status === 400 || response.status === 403)) {
+      response = await postEvent(currentToken, 'basic');
     }
 
     if (!response.ok) {

@@ -1269,13 +1269,36 @@
         }
         // Immediately block the slot in publicHost memory so it shows as Ocupado
         state.publicHost.scheduledMeetings = Array.isArray(state.publicHost.scheduledMeetings)
-          ? [newMeeting, ...state.publicHost.scheduledMeetings]
+          ? [newMeeting, ...state.publicHost.scheduledMeetings.filter(m => m.id !== newMeeting.id)]
           : [newMeeting];
         const startObj = new Date(newMeeting.dateTime);
         const endObj = new Date(startObj.getTime() + (Number(newMeeting.duration) || 30) * 60000);
+        const calEv = {
+          id: newMeeting.id,
+          summary: `${newMeeting.eventTitle || 'Reunión'} con ${newMeeting.inviteeName || 'Invitado'}`,
+          start: startObj.toISOString(),
+          end: endObj.toISOString(),
+          location: newMeeting.locationUrl || newMeeting.location || 'Google Meet',
+          status: 'CONFIRMED'
+        };
         state.publicHost.events = Array.isArray(state.publicHost.events)
-          ? [...state.publicHost.events, { start: startObj.toISOString(), end: endObj.toISOString(), status: 'CONFIRMED' }]
-          : [{ start: startObj.toISOString(), end: endObj.toISOString(), status: 'CONFIRMED' }];
+          ? [...state.publicHost.events.filter(ev => ev.id !== calEv.id), calEv]
+          : [calEv];
+
+        // Also update the in-app calendar state if logged in
+        if (state.auth && state.auth.authenticated) {
+          state.googleCalendar.events = Array.isArray(state.googleCalendar.events)
+            ? [calEv, ...state.googleCalendar.events.filter(ev => ev.id !== calEv.id)]
+            : [calEv];
+          state.googleCalendar.eventCount = state.googleCalendar.events.length;
+          if (state.googleCalendar.connected) {
+            saveUserLocalCalendarMeta({
+              userKey: getCurrentUserStorageKey(),
+              ...state.googleCalendar
+            });
+          }
+          updateGoogleCalendarUI();
+        }
         return data;
       }
     } catch (e) {
@@ -1320,7 +1343,9 @@
 
       const bookResult = await submitBookingToServer(newMeeting);
 
-      state.scheduledMeetings.unshift(newMeeting);
+      if (!state.scheduledMeetings.some(item => item.id === newMeeting.id)) {
+        state.scheduledMeetings.unshift(newMeeting);
+      }
       saveState();
 
       // Show Step 3 (Confirmation)
@@ -1332,33 +1357,31 @@
       document.getElementById('success-datetime').textContent = `${y}-${m}-${d} a las ${state.selectedSlot}`;
       document.getElementById('success-location').textContent = `${state.bookingEvent.location} (${newMeeting.locationUrl})`;
 
-      // Setup Calendar links (Google, Outlook, ICS)
-      const startObj = new Date(dateTimeIso);
-      const endObj = new Date(startObj.getTime() + state.bookingEvent.duration * 60000);
-      const pad = (n) => String(n).padStart(2, '0');
-      const gDate = (d) => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`;
-
-      const hostName = getPublicHostName();
-      const gCalUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(newMeeting.eventTitle + ' con ' + hostName)}&dates=${gDate(startObj)}/${gDate(endObj)}&details=${encodeURIComponent(newMeeting.inviteeNotes || 'Reunión programada')}&location=${encodeURIComponent(newMeeting.locationUrl || newMeeting.location)}`;
-      const outCalUrl = `https://outlook.live.com/calendar/0/deeplink/compose?path=/calendar/action/compose&rru=addevent&subject=${encodeURIComponent(newMeeting.eventTitle + ' con ' + hostName)}&startdt=${startObj.toISOString()}&enddt=${endObj.toISOString()}&body=${encodeURIComponent(newMeeting.inviteeNotes || 'Reunión programada')}&location=${encodeURIComponent(newMeeting.locationUrl || newMeeting.location)}`;
-
       const btnG = document.getElementById('btn-add-google-cal');
-      const btnO = document.getElementById('btn-add-outlook-cal');
       if (btnG) {
-        btnG.href = (bookResult && bookResult.googleEventHtmlLink) ? bookResult.googleEventHtmlLink : gCalUrl;
+        btnG.textContent = (bookResult && bookResult.googleEventCreated)
+          ? '✓ Sincronizado en Google Calendar desde la app'
+          : '✓ Guardado en el calendario de la aplicación';
+        btnG.onclick = async (ev) => {
+          ev.preventDefault();
+          btnG.disabled = true;
+          btnG.textContent = '⏳ Sincronizando en la aplicación...';
+          await submitBookingToServer(newMeeting);
+          btnG.disabled = false;
+          btnG.textContent = '✓ Sincronizado en el calendario desde la app';
+          showToast('¡Reunión guardada y sincronizada directamente desde la aplicación!', '✓');
+        };
       }
-      if (btnO) btnO.href = outCalUrl;
 
       // Setup ICS download
-      document.getElementById('btn-download-ics').onclick = () => downloadIcsFile(newMeeting);
+      const btnIcsModal = document.getElementById('btn-download-ics');
+      if (btnIcsModal) {
+        btnIcsModal.onclick = () => downloadIcsFile(newMeeting);
+      }
 
       // Refresh listings
       renderScheduledMeetings();
-      if (bookResult && bookResult.googleEventCreated) {
-        showToast('¡Reunión agendada automáticamente en Google Calendar!', '🎉');
-      } else {
-        showToast('¡Reunión programada con éxito!', '🎉');
-      }
+      showToast('¡Reunión agendada directamente en el calendario desde la aplicación!', '🎉');
     });
   }
 
@@ -2306,7 +2329,9 @@
 
         const bookResult = await submitBookingToServer(newMeeting);
 
-        state.scheduledMeetings.unshift(newMeeting);
+        if (!state.scheduledMeetings.some(item => item.id === newMeeting.id)) {
+          state.scheduledMeetings.unshift(newMeeting);
+        }
         saveState();
 
         document.getElementById('pub-step-form').style.display = 'none';
@@ -2319,35 +2344,27 @@
         document.getElementById('pub-success-datetime').textContent = document.getElementById('pub-selected-datetime-text').textContent;
         document.getElementById('pub-success-location').textContent = `${state.bookingEvent.location} (${newMeeting.locationUrl})`;
 
-        const startObj = new Date(dateTimeIso);
-        const endObj = new Date(startObj.getTime() + state.bookingEvent.duration * 60000);
-        const pad = (n) => String(n).padStart(2, '0');
-        const gDate = (dt) => `${dt.getUTCFullYear()}${pad(dt.getUTCMonth() + 1)}${pad(dt.getUTCDate())}T${pad(dt.getUTCHours())}${pad(dt.getUTCMinutes())}00Z`;
-
-        const gCalUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(newMeeting.eventTitle + ' con ' + hostName)}&dates=${gDate(startObj)}/${gDate(endObj)}&details=${encodeURIComponent((newMeeting.inviteeNotes || 'Reunión programada') + '\nInvitado: ' + name + ' (' + email + ')')}&location=${encodeURIComponent(newMeeting.locationUrl || newMeeting.location)}&add=${encodeURIComponent(email)}`;
-        const outCalUrl = `https://outlook.live.com/calendar/0/deeplink/compose?path=/calendar/action/compose&rru=addevent&subject=${encodeURIComponent(newMeeting.eventTitle + ' con ' + hostName)}&startdt=${startObj.toISOString()}&enddt=${endObj.toISOString()}&body=${encodeURIComponent(newMeeting.inviteeNotes || 'Reunión programada')}&location=${encodeURIComponent(newMeeting.locationUrl || newMeeting.location)}`;
-
         const btnG = document.getElementById('pub-btn-add-gcal');
-        const btnO = document.getElementById('pub-btn-add-outlook');
         if (btnG) {
-          btnG.href = (bookResult && bookResult.googleEventHtmlLink) ? bookResult.googleEventHtmlLink : gCalUrl;
           btnG.textContent = (bookResult && bookResult.googleEventCreated)
-            ? '✓ Agendado en Google Calendar (Ver evento)'
-            : '📅 Guardar en mi Google Calendar';
+            ? '✓ Sincronizado en Google Calendar desde la app'
+            : '✓ Guardado en el calendario de la aplicación';
+          btnG.onclick = async (ev) => {
+            ev.preventDefault();
+            btnG.disabled = true;
+            btnG.textContent = '⏳ Sincronizando en la aplicación...';
+            await submitBookingToServer(newMeeting);
+            btnG.disabled = false;
+            btnG.textContent = '✓ Sincronizado en el calendario desde la app';
+            showToast('¡Reunión guardada y sincronizada directamente desde la aplicación!', '✓');
+          };
         }
-        if (btnO) btnO.href = outCalUrl;
 
         const btnIcs = document.getElementById('pub-btn-download-ics');
         if (btnIcs) btnIcs.onclick = () => downloadIcsFile(newMeeting);
 
         renderScheduledMeetings();
-
-        if (bookResult && bookResult.googleEventCreated) {
-          showToast('¡Reunión agendada automáticamente en Google Calendar!', '🎉');
-        } else {
-          showToast('¡Reunión registrada! Abriendo Google Calendar para confirmar en tu agenda...', '🎉');
-          window.open(gCalUrl, '_blank', 'noopener,noreferrer');
-        }
+        showToast('¡Reunión agendada directamente en el calendario desde la aplicación!', '🎉');
       } finally {
         if (submitBtn) {
           submitBtn.disabled = false;
@@ -2487,6 +2504,20 @@
       if (data.success) {
         if (data.publicHostToken) {
           state.auth.publicHostToken = data.publicHostToken;
+        }
+        // Merge any meetings booked via public page on the server into state.scheduledMeetings
+        if (Array.isArray(data.scheduledMeetings) && data.scheduledMeetings.length > 0) {
+          let addedAny = false;
+          data.scheduledMeetings.forEach(srvMeet => {
+            if (srvMeet && srvMeet.id && !state.scheduledMeetings.some(localMeet => localMeet.id === srvMeet.id)) {
+              state.scheduledMeetings.unshift(srvMeet);
+              addedAny = true;
+            }
+          });
+          if (addedAny) {
+            saveState();
+            renderScheduledMeetings();
+          }
         }
         // If server is disconnected ONLY because of a serverless cold start,
         // restore ONLY if THIS specific user had previously connected in this browser.
@@ -2695,6 +2726,19 @@
       const data = await res.json();
       if (res.ok && data.success) {
         const events = Array.isArray(data.events) ? data.events : [];
+        if (Array.isArray(data.scheduledMeetings) && data.scheduledMeetings.length > 0) {
+          let addedAny = false;
+          data.scheduledMeetings.forEach(srvMeet => {
+            if (srvMeet && srvMeet.id && !state.scheduledMeetings.some(localMeet => localMeet.id === srvMeet.id)) {
+              state.scheduledMeetings.unshift(srvMeet);
+              addedAny = true;
+            }
+          });
+          if (addedAny) {
+            saveState();
+            renderScheduledMeetings();
+          }
+        }
         state.googleCalendar.connected = true;
         if (data.calendarName) state.googleCalendar.calendarName = data.calendarName;
         state.googleCalendar.events = events;

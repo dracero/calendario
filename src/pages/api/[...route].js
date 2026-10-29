@@ -14,6 +14,7 @@ import {
   saveSyncConfig,
   loadMeetings,
   saveMeetings,
+  mergeMeetingsIntoEvents,
   parseIcal,
   generateDemoEvents,
   fetchGoogleCalendarApiEvents,
@@ -422,10 +423,12 @@ export const ALL = async (context) => {
     // Public Page Lookup: Resolve the PUBLIC HOST's calendar and busy slots (even if visitor is logged in as someone else!)
     if (isPublicLookup || requestedSlug || requestedHostToken || !user) {
       const { userKey: hostUserKey, config } = resolvePublicHostConfig(requestedSlug || null, requestedHostToken || null);
-      const hostMeetings = hostUserKey ? loadMeetings(hostUserKey) : [];
+      const effectiveSlug = config.hostSlug || requestedSlug || null;
+      const hostMeetings = loadMeetings(hostUserKey, effectiveSlug);
+      const mergedHostEvents = mergeMeetingsIntoEvents(config.events || [], hostMeetings);
 
-      const publicBusyEvents = config.connected
-        ? (config.events || []).slice(0, 100).map(ev => ({
+      const publicBusyEvents = (config.connected || mergedHostEvents.length > 0)
+        ? mergedHostEvents.slice(0, 100).map(ev => ({
             start: ev.start,
             end: ev.end,
             status: ev.status || 'CONFIRMED'
@@ -438,7 +441,7 @@ export const ALL = async (context) => {
       return jsonResponse({
         success: true,
         isPublicHost: true,
-        connected: !!config.connected,
+        connected: !!(config.connected || hostMeetings.length > 0),
         calendarName: null,
         hostPublicName: cleanHostName,
         hostSlug: config.hostSlug || (cleanHostName ? slugifyName(cleanHostName) : requestedSlug || null),
@@ -462,19 +465,22 @@ export const ALL = async (context) => {
       saveSyncConfig(config, user);
     }
 
-    const isConnected = !!config.connected;
-    const calendarName = isConnected ? (config.calendarName || `${user.name} (${user.email})`) : null;
-    const events = isConnected && Array.isArray(config.events) ? config.events : [];
-
     const cleanAuthHostName = (config.hostPublicName || user.name || '')
       .replace(/calendly/gi, 'Reuniones')
       .trim();
+    const authHostSlug = config.hostSlug || slugifyName(cleanAuthHostName || user.name);
+    const userMeetings = loadMeetings(user, authHostSlug);
+
+    const isConnected = !!config.connected;
+    const calendarName = isConnected ? (config.calendarName || `${user.name} (${user.email})`) : null;
+    const baseEvents = isConnected && Array.isArray(config.events) ? config.events : [];
+    const events = isConnected ? mergeMeetingsIntoEvents(baseEvents, userMeetings) : [];
 
     const publicHostToken = encryptHostToken({
       userKey: user.email || user.id,
       name: cleanAuthHostName || user.name,
       email: user.email,
-      slug: slugifyName(cleanAuthHostName || user.name),
+      slug: authHostSlug,
       connected: isConnected,
       syncMode: config.syncMode || null,
       icalUrl: config.icalUrl || '',
@@ -495,6 +501,7 @@ export const ALL = async (context) => {
       autoBlock: config.autoBlock !== false,
       eventCount: events.length,
       events: events.slice(0, 100),
+      scheduledMeetings: userMeetings,
       isDemo: !!(isConnected && config.isDemo)
     });
   }
@@ -662,6 +669,9 @@ export const ALL = async (context) => {
     }
 
     // 1. Demo Mode Sync
+    const userSlug = config.hostSlug || slugifyName(user.name);
+    const userMeetings = loadMeetings(user, userSlug);
+
     if (isDemoMode) {
       config.connected = true;
       config.syncMode = 'demo';
@@ -669,14 +679,15 @@ export const ALL = async (context) => {
       config.calendarName = config.calendarName || `${user.name} (Google Calendar Demo)`;
       config.hostPublicName = user.name;
       config.lastSync = new Date().toISOString();
-      config.events = generateDemoEvents();
+      config.events = mergeMeetingsIntoEvents(generateDemoEvents(), userMeetings);
       saveSyncConfig(config, user);
       return jsonResponse({
         success: true,
         source: 'demo',
         calendarName: config.calendarName,
         count: config.events.length,
-        events: config.events
+        events: config.events,
+        scheduledMeetings: userMeetings
       });
     }
 
@@ -692,6 +703,7 @@ export const ALL = async (context) => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const icalContent = await response.text();
         const { calendarName, events } = parseIcal(icalContent);
+        const mergedEvents = mergeMeetingsIntoEvents(events, userMeetings);
         config.connected = true;
         config.syncMode = 'ical';
         config.isDemo = false;
@@ -699,14 +711,15 @@ export const ALL = async (context) => {
         config.calendarName = calendarName || config.calendarName || `${user.name} (Google Calendar)`;
         config.hostPublicName = user.name;
         config.lastSync = new Date().toISOString();
-        config.events = events;
+        config.events = mergedEvents;
         saveSyncConfig(config, user);
         return jsonResponse({
           success: true,
           source: 'ical',
           calendarName: config.calendarName,
-          count: events.length,
-          events: events.slice(0, 100)
+          count: mergedEvents.length,
+          events: mergedEvents.slice(0, 100),
+          scheduledMeetings: userMeetings
         });
       } catch (err) {
         return jsonResponse({ success: false, error: `Error al sincronizar URL iCal: ${err.message}` }, 500);
@@ -729,21 +742,23 @@ export const ALL = async (context) => {
       }
 
       if (apiResult.ok) {
+        const mergedEvents = mergeMeetingsIntoEvents(apiResult.events, userMeetings);
         config.connected = true;
         config.syncMode = 'google_oauth';
         config.isDemo = false;
         config.calendarName = config.calendarName || `${user.name} (${user.email})`;
         config.hostPublicName = user.name;
         config.lastSync = new Date().toISOString();
-        config.events = apiResult.events;
+        config.events = mergedEvents;
         saveSyncConfig(config, user);
 
         return jsonResponse({
           success: true,
           source: 'google_oauth',
           calendarName: config.calendarName,
-          count: apiResult.events.length,
-          events: apiResult.events.slice(0, 100)
+          count: mergedEvents.length,
+          events: mergedEvents.slice(0, 100),
+          scheduledMeetings: userMeetings
         }, 200, {}, updatedCookies);
       }
 
@@ -757,21 +772,23 @@ export const ALL = async (context) => {
           if (pubRes.ok) {
             const icalContent = await pubRes.text();
             const { events } = parseIcal(icalContent);
+            const mergedEvents = mergeMeetingsIntoEvents(events, userMeetings);
             config.connected = true;
             config.syncMode = 'google_oauth';
             config.isDemo = false;
             config.calendarName = config.calendarName || `${user.name} (${user.email})`;
             config.hostPublicName = user.name;
             config.lastSync = new Date().toISOString();
-            config.events = events;
+            config.events = mergedEvents;
             saveSyncConfig(config, user);
 
             return jsonResponse({
               success: true,
               source: 'google_public_ical',
               calendarName: config.calendarName,
-              count: events.length,
-              events: events.slice(0, 100)
+              count: mergedEvents.length,
+              events: mergedEvents.slice(0, 100),
+              scheduledMeetings: userMeetings
             }, 200, {}, updatedCookies);
           }
         } catch {
@@ -780,19 +797,7 @@ export const ALL = async (context) => {
       }
 
       // Fallback 3b: Sync with this user's scheduled internal meetings
-      const meetings = loadMeetings(user).filter(m => m.status === 'upcoming');
-      const fallbackEvents = meetings.map((m, idx) => {
-        const startObj = new Date(m.dateTime);
-        const endObj = new Date(startObj.getTime() + (m.duration || 30) * 60000);
-        return {
-          id: m.id || `local-meet-${idx}`,
-          summary: `${m.eventTitle || 'Reunión'} con ${m.inviteeName || 'Invitado'}`,
-          start: startObj.toISOString(),
-          end: endObj.toISOString(),
-          location: m.location || 'Google Meet',
-          status: 'CONFIRMED'
-        };
-      });
+      const fallbackEvents = mergeMeetingsIntoEvents(config.events || [], userMeetings);
 
       config.connected = true;
       config.syncMode = 'google_oauth';
@@ -808,6 +813,7 @@ export const ALL = async (context) => {
         calendarName: config.calendarName,
         count: config.events.length,
         events: config.events.slice(0, 100),
+        scheduledMeetings: userMeetings,
         warning: apiResult.error
       }, 200, {}, updatedCookies);
     }
@@ -916,28 +922,31 @@ export const ALL = async (context) => {
     };
 
     // 3. Save meeting to the Host's server-side meetings list
+    const durationMs = (Number(enrichedMeeting.duration) || 30) * 60000;
+    const startObj = new Date(enrichedMeeting.dateTime);
+    const endObj = new Date(startObj.getTime() + durationMs);
+    const busyEvent = {
+      id: enrichedMeeting.id,
+      summary: `${enrichedMeeting.eventTitle || 'Reunión'} con ${enrichedMeeting.inviteeName || 'Invitado'}`,
+      start: startObj.toISOString(),
+      end: endObj.toISOString(),
+      location: enrichedMeeting.locationUrl || enrichedMeeting.location || 'Google Meet',
+      status: 'CONFIRMED'
+    };
+
     if (effectiveHostKey) {
-      const hostMeetings = loadMeetings(effectiveHostKey);
+      const hostMeetings = loadMeetings(effectiveHostKey, enrichedMeeting.hostSlug);
       const exists = hostMeetings.some(m => m.id === enrichedMeeting.id);
       if (!exists) {
         hostMeetings.unshift(enrichedMeeting);
-        saveMeetings(hostMeetings, effectiveHostKey);
+        saveMeetings(hostMeetings, effectiveHostKey, enrichedMeeting.hostSlug);
       }
 
       // Also add busy event to Host's syncConfig.events so the slot is immediately blocked on the public page
-      const durationMs = (Number(enrichedMeeting.duration) || 30) * 60000;
-      const startObj = new Date(enrichedMeeting.dateTime);
-      const endObj = new Date(startObj.getTime() + durationMs);
-      const busyEvent = {
-        id: enrichedMeeting.id,
-        summary: `${enrichedMeeting.eventTitle || 'Reunión'} con ${enrichedMeeting.inviteeName || 'Invitado'}`,
-        start: startObj.toISOString(),
-        end: endObj.toISOString(),
-        location: enrichedMeeting.locationUrl || enrichedMeeting.location || 'Google Meet',
-        status: 'CONFIRMED'
-      };
       hostConfig.events = Array.isArray(hostConfig.events) ? hostConfig.events : [];
-      hostConfig.events.push(busyEvent);
+      if (!hostConfig.events.some(ev => ev.id === busyEvent.id)) {
+        hostConfig.events.push(busyEvent);
+      }
       hostConfig.lastSync = new Date().toISOString();
       if (!hostConfig.hostPublicName && effectiveHostName) {
         hostConfig.hostPublicName = effectiveHostName;
@@ -945,7 +954,7 @@ export const ALL = async (context) => {
       saveSyncConfig(hostConfig, effectiveHostKey, enrichedMeeting.hostSlug);
     }
 
-    // 4. If visitor is logged in as a different user, also save to visitor's meetings list
+    // 4. If visitor is logged in as a different user, also save to visitor's meetings list and calendar events
     const visitorKey = visitorUser ? (visitorUser.email || visitorUser.id) : null;
     if (visitorKey && visitorKey !== effectiveHostKey) {
       const visitorMeetings = loadMeetings(visitorKey);
@@ -953,6 +962,13 @@ export const ALL = async (context) => {
         visitorMeetings.unshift(enrichedMeeting);
         saveMeetings(visitorMeetings, visitorKey);
       }
+      const visitorConfig = loadSyncConfig(visitorUser);
+      visitorConfig.events = Array.isArray(visitorConfig.events) ? visitorConfig.events : [];
+      if (!visitorConfig.events.some(ev => ev.id === busyEvent.id)) {
+        visitorConfig.events.push(busyEvent);
+      }
+      visitorConfig.lastSync = new Date().toISOString();
+      saveSyncConfig(visitorConfig, visitorUser);
     }
 
     return jsonResponse({
