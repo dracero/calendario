@@ -171,11 +171,46 @@ export function slugifyName(name) {
     .replace(/^-+|-+$/g, '');
 }
 
+export function encryptHostToken(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  try {
+    const key = crypto.createHash('sha256').update(getSecret()).digest();
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const json = JSON.stringify(payload);
+    const encrypted = Buffer.concat([cipher.update(json, 'utf8'), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+    return `${iv.toString('base64url')}.${authTag.toString('base64url')}.${encrypted.toString('base64url')}`;
+  } catch {
+    return null;
+  }
+}
+
+export function decryptHostToken(token) {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  try {
+    const key = crypto.createHash('sha256').update(getSecret()).digest();
+    const iv = Buffer.from(parts[0], 'base64url');
+    const authTag = Buffer.from(parts[1], 'base64url');
+    const encrypted = Buffer.from(parts[2], 'base64url');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(authTag);
+    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+    return JSON.parse(decrypted);
+  } catch {
+    return null;
+  }
+}
+
 export function createDefaultSyncConfig() {
   return {
     connected: false,
     calendarName: null,
     hostPublicName: null,
+    hostEmail: null,
+    hostSlug: null,
     lastSync: null,
     autoBlock: true,
     icalUrl: '',
@@ -200,9 +235,20 @@ export function loadSyncConfig(userId = null, hostSlug = null) {
       }
 
       if (hostSlug) {
-        const mappedUserKey = bySlug[hostSlug];
+        const cleanSlug = slugifyName(hostSlug);
+        const mappedUserKey = bySlug[cleanSlug] || bySlug[hostSlug];
         if (mappedUserKey && byUser[mappedUserKey]) {
           return { ...createDefaultSyncConfig(), ...byUser[mappedUserKey] };
+        }
+        // Search by matching hostPublicName or email prefix
+        for (const [, cfg] of Object.entries(byUser)) {
+          if (
+            cfg.hostSlug === cleanSlug ||
+            slugifyName(cfg.hostPublicName) === cleanSlug ||
+            (cfg.hostEmail && slugifyName(cfg.hostEmail.split('@')[0]) === cleanSlug)
+          ) {
+            return { ...createDefaultSyncConfig(), ...cfg };
+          }
         }
       }
     }
@@ -210,6 +256,103 @@ export function loadSyncConfig(userId = null, hostSlug = null) {
     console.error('Error reading sync file:', e);
   }
   return createDefaultSyncConfig();
+}
+
+export function resolvePublicHostConfig(hostSlug = null, hostToken = null) {
+  const tokenData = decryptHostToken(hostToken);
+  const cleanSlug = hostSlug ? slugifyName(hostSlug) : (tokenData?.slug || null);
+
+  try {
+    if (fs.existsSync(SYNC_FILE)) {
+      const data = JSON.parse(fs.readFileSync(SYNC_FILE, 'utf-8'));
+      const byUser = data.byUser || {};
+      const bySlug = data.bySlug || {};
+
+      // 1. Direct lookup by userKey from decrypted hostToken
+      if (tokenData?.userKey && byUser[tokenData.userKey]) {
+        const cfg = byUser[tokenData.userKey];
+        return {
+          userKey: tokenData.userKey,
+          config: {
+            ...createDefaultSyncConfig(),
+            ...cfg,
+            googleAccessToken: cfg.googleAccessToken || tokenData.googleAccessToken || null,
+            googleRefreshToken: cfg.googleRefreshToken || tokenData.googleRefreshToken || null,
+            icalUrl: cfg.icalUrl || tokenData.icalUrl || ''
+          }
+        };
+      }
+
+      // 2. Lookup by hostSlug in bySlug or byUser
+      if (cleanSlug) {
+        const mappedKey = bySlug[cleanSlug] || bySlug[hostSlug];
+        if (mappedKey && byUser[mappedKey]) {
+          return {
+            userKey: mappedKey,
+            config: { ...createDefaultSyncConfig(), ...byUser[mappedKey] }
+          };
+        }
+        for (const [uKey, cfg] of Object.entries(byUser)) {
+          if (
+            cfg.hostSlug === cleanSlug ||
+            slugifyName(cfg.hostPublicName) === cleanSlug ||
+            (cfg.hostEmail && slugifyName(cfg.hostEmail.split('@')[0]) === cleanSlug)
+          ) {
+            return {
+              userKey: uKey,
+              config: { ...createDefaultSyncConfig(), ...cfg }
+            };
+          }
+        }
+      }
+
+      // 3. Fallback when booking via a generic event link (e.g. #/book/reunion-15-min) without user slug:
+      // Find the most recently active host who has connected a calendar or logged in
+      const entries = Object.entries(byUser);
+      const connectedEntry = entries.find(([, cfg]) => cfg && (cfg.connected || cfg.googleAccessToken));
+      if (connectedEntry) {
+        return {
+          userKey: connectedEntry[0],
+          config: { ...createDefaultSyncConfig(), ...connectedEntry[1] }
+        };
+      }
+      if (entries.length > 0) {
+        return {
+          userKey: entries[0][0],
+          config: { ...createDefaultSyncConfig(), ...entries[0][1] }
+        };
+      }
+    }
+  } catch (e) {
+    console.error('Error resolving public host config:', e);
+  }
+
+  // 4. Cold-start restoration from encrypted hostToken if /tmp was wiped
+  if (tokenData && tokenData.userKey) {
+    const restoredConfig = {
+      ...createDefaultSyncConfig(),
+      connected: !!tokenData.connected,
+      syncMode: tokenData.syncMode || null,
+      calendarName: tokenData.calendarName || `${tokenData.name || 'Anfitrión'} (${tokenData.email || ''})`,
+      hostPublicName: tokenData.name || 'Agenda de Reuniones',
+      hostEmail: tokenData.email || null,
+      hostSlug: tokenData.slug || slugifyName(tokenData.name),
+      icalUrl: tokenData.icalUrl || '',
+      googleAccessToken: tokenData.googleAccessToken || null,
+      googleRefreshToken: tokenData.googleRefreshToken || null,
+      events: []
+    };
+    saveSyncConfig(restoredConfig, tokenData.userKey, restoredConfig.hostSlug);
+    return {
+      userKey: tokenData.userKey,
+      config: restoredConfig
+    };
+  }
+
+  return {
+    userKey: cleanSlug || null,
+    config: createDefaultSyncConfig()
+  };
 }
 
 export function saveSyncConfig(config, userId = null, hostSlug = null) {
@@ -226,16 +369,22 @@ export function saveSyncConfig(config, userId = null, hostSlug = null) {
         existing = { byUser: {}, bySlug: {} };
       }
     }
+    const prevUserConfig = existing.byUser[cleanKey] || {};
+    const derivedSlug = hostSlug || config.hostSlug || slugifyName(config.hostPublicName || prevUserConfig.hostPublicName);
+
     const cleanConfig = {
       ...createDefaultSyncConfig(),
-      ...config
+      ...prevUserConfig,
+      ...config,
+      hostSlug: derivedSlug || prevUserConfig.hostSlug || null,
+      googleAccessToken: config.googleAccessToken !== undefined ? config.googleAccessToken : (prevUserConfig.googleAccessToken || null),
+      googleRefreshToken: config.googleRefreshToken !== undefined ? config.googleRefreshToken : (prevUserConfig.googleRefreshToken || null)
     };
     delete cleanConfig.byUser;
     delete cleanConfig.bySlug;
 
     existing.byUser[cleanKey] = cleanConfig;
 
-    const derivedSlug = hostSlug || slugifyName(cleanConfig.hostPublicName);
     if (derivedSlug) {
       existing.bySlug[derivedSlug] = cleanKey;
     }
@@ -554,6 +703,150 @@ export async function fetchGoogleCalendarApiEvents(accessToken, refreshToken = n
       ok: false,
       events: [],
       error: err.message || 'Error consultando Google Calendar API',
+      newAccessToken: refreshedToken
+    };
+  }
+}
+
+export async function createGoogleCalendarEvent(accessToken, refreshToken = null, meeting = {}, hostName = 'Anfitrión', hostEmail = null) {
+  if (!accessToken || accessToken.startsWith('demo_token_')) {
+    return { ok: false, error: 'No Google OAuth access token available for calendar insertion' };
+  }
+
+  const timeZone = meeting.timeZone || 'America/Santiago';
+  const durationMinutes = Number(meeting.duration) || 30;
+
+  // Build start and end dateTime strings
+  const rawDateTime = String(meeting.dateTime || '');
+  let startDateTimeStr = rawDateTime;
+  let endDateTimeStr = '';
+
+  // If rawDateTime is "YYYY-MM-DDTHH:mm:ss" (without Z or offset), calculate end in the same local wall-clock time
+  const localMatch = rawDateTime.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (localMatch) {
+    const [, y, m, d, hh, mm, ss = '00'] = localMatch;
+    const utcMs = Date.UTC(+y, +m - 1, +d, +hh, +mm, +ss);
+    const endUtc = new Date(utcMs + durationMinutes * 60000);
+    const pad = (n) => String(n).padStart(2, '0');
+    startDateTimeStr = `${y}-${m}-${d}T${hh}:${mm}:${ss}`;
+    endDateTimeStr = `${endUtc.getUTCFullYear()}-${pad(endUtc.getUTCMonth() + 1)}-${pad(endUtc.getUTCDate())}T${pad(endUtc.getUTCHours())}:${pad(endUtc.getUTCMinutes())}:${pad(endUtc.getUTCSeconds())}`;
+  } else {
+    const startObj = new Date(rawDateTime);
+    const endObj = new Date(startObj.getTime() + durationMinutes * 60000);
+    startDateTimeStr = startObj.toISOString();
+    endDateTimeStr = endObj.toISOString();
+  }
+
+  const attendees = [];
+  if (meeting.inviteeEmail && meeting.inviteeEmail.includes('@')) {
+    attendees.push({
+      email: meeting.inviteeEmail.trim(),
+      displayName: meeting.inviteeName || 'Invitado'
+    });
+  }
+  if (hostEmail && hostEmail.includes('@') && hostEmail.toLowerCase().trim() !== (meeting.inviteeEmail || '').toLowerCase().trim()) {
+    attendees.push({
+      email: hostEmail.trim(),
+      displayName: hostName || 'Anfitrión'
+    });
+  }
+
+  const descriptionLines = [
+    `Reunión programada: ${meeting.eventTitle || 'Reunión'}`,
+    `Anfitrión: ${hostName}`,
+    `Invitado: ${meeting.inviteeName || 'Invitado'} (${meeting.inviteeEmail || ''})`
+  ];
+  if (meeting.inviteePhone) descriptionLines.push(`Teléfono: ${meeting.inviteePhone}`);
+  if (meeting.inviteeNotes) descriptionLines.push(`Notas: ${meeting.inviteeNotes}`);
+  if (meeting.locationUrl) descriptionLines.push(`Enlace de reunión: ${meeting.locationUrl}`);
+
+  const baseEventBody = {
+    summary: `${meeting.eventTitle || 'Reunión'}: ${meeting.inviteeName || 'Invitado'} y ${hostName}`,
+    description: descriptionLines.join('\n'),
+    location: meeting.locationUrl || meeting.location || 'Google Meet',
+    start: {
+      dateTime: startDateTimeStr,
+      timeZone
+    },
+    end: {
+      dateTime: endDateTimeStr,
+      timeZone
+    },
+    attendees,
+    reminders: {
+      useDefault: true
+    }
+  };
+
+  const eventBodyWithMeet = {
+    ...baseEventBody,
+    conferenceData: {
+      createRequest: {
+        requestId: `meet-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+        conferenceSolutionKey: { type: 'hangoutsMeet' }
+      }
+    }
+  };
+
+  let currentToken = accessToken;
+  let refreshedToken = null;
+
+  const postEvent = async (token, withConference = true) => {
+    const query = withConference
+      ? 'conferenceDataVersion=1&sendUpdates=all'
+      : 'sendUpdates=all';
+    const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?${query}`;
+    return fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(withConference ? eventBodyWithMeet : baseEventBody)
+    });
+  };
+
+  try {
+    let response = await postEvent(currentToken, true);
+
+    if (response.status === 401 && refreshToken) {
+      refreshedToken = await refreshGoogleAccessToken(refreshToken);
+      if (refreshedToken) {
+        currentToken = refreshedToken;
+        response = await postEvent(currentToken, true);
+      }
+    }
+
+    // If conferenceData creation is rejected by the account type, retry without conferenceData
+    if (!response.ok && response.status === 400) {
+      response = await postEvent(currentToken, false);
+    }
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      const errMsg = errData?.error?.message || `Google Calendar API HTTP ${response.status}`;
+      return {
+        ok: false,
+        status: response.status,
+        error: errMsg,
+        newAccessToken: refreshedToken
+      };
+    }
+
+    const created = await response.json();
+    return {
+      ok: true,
+      eventId: created.id,
+      htmlLink: created.htmlLink || null,
+      hangoutLink: created.hangoutLink || created.conferenceData?.entryPoints?.[0]?.uri || null,
+      start: created.start?.dateTime || startDateTimeStr,
+      end: created.end?.dateTime || endDateTimeStr,
+      newAccessToken: refreshedToken
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err.message || 'Error insertando evento en Google Calendar',
       newAccessToken: refreshedToken
     };
   }

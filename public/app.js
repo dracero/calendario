@@ -168,11 +168,21 @@
       events: [],
       isDemo: false
     },
+    // Public Host State (when viewing another person's public booking link)
+    publicHost: {
+      connected: false,
+      hostPublicName: null,
+      hostSlug: null,
+      autoBlock: true,
+      events: [],
+      scheduledMeetings: []
+    },
     // Authentication State (Google OAuth / Calendly Clone)
     auth: {
       authenticated: false,
       checked: false,
       user: null,
+      publicHostToken: null,
       googleConfigured: false,
       googleClientId: null
     }
@@ -314,6 +324,64 @@
     return name.replace(/calendly/gi, 'Reuniones').trim();
   }
 
+  function humanizeSlug(slug) {
+    if (!slug || typeof slug !== 'string') return '';
+    return slug
+      .replace(/[-_]+/g, ' ')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+  }
+
+  function getPublicRouteContext() {
+    const hash = window.location.hash || '';
+    const path = window.location.pathname || '';
+    const searchParams = new URLSearchParams(window.location.search);
+
+    let hashPath = hash.startsWith('#') ? hash.substring(1) : hash;
+    let hashQuery = '';
+    const qIdx = hashPath.indexOf('?');
+    if (qIdx !== -1) {
+      hashQuery = hashPath.substring(qIdx + 1);
+      hashPath = hashPath.substring(0, qIdx);
+    }
+    const hashParams = new URLSearchParams(hashQuery);
+
+    const hostToken = hashParams.get('ht') || searchParams.get('ht') || '';
+    let hostSlug = hashParams.get('host') || searchParams.get('host') || '';
+    let eventSlug = '';
+
+    if (hashPath.startsWith('/user/')) {
+      hostSlug = decodeURIComponent(hashPath.replace('/user/', '').split('/')[0] || '');
+    } else if (path.startsWith('/user/')) {
+      hostSlug = decodeURIComponent(path.replace('/user/', '').split('/')[0] || '');
+    } else if (hashPath.startsWith('/book/')) {
+      const rest = hashPath.replace('/book/', '').split('/').filter(Boolean);
+      if (rest.length >= 2) {
+        hostSlug = decodeURIComponent(rest[0]);
+        eventSlug = decodeURIComponent(rest[1]);
+      } else if (rest.length === 1) {
+        eventSlug = decodeURIComponent(rest[0]);
+      }
+    } else if (path.startsWith('/book/')) {
+      const rest = path.replace('/book/', '').split('/').filter(Boolean);
+      if (rest.length >= 2) {
+        hostSlug = decodeURIComponent(rest[0]);
+        eventSlug = decodeURIComponent(rest[1]);
+      } else if (rest.length === 1) {
+        eventSlug = decodeURIComponent(rest[0]);
+      }
+    }
+
+    return {
+      hostSlug: hostSlug.trim(),
+      eventSlug: eventSlug.trim(),
+      hostToken: hostToken.trim()
+    };
+  }
+
   function getHostName() {
     if (state.auth && state.auth.authenticated && state.auth.user && state.auth.user.name) {
       return sanitizePublicBrandName(state.auth.user.name) || 'Agenda de Reuniones';
@@ -322,6 +390,22 @@
       return sanitizePublicBrandName(state.googleCalendar.hostPublicName) || 'Agenda de Reuniones';
     }
     return 'Agenda de Reuniones';
+  }
+
+  function getPublicHostName() {
+    const ctx = getPublicRouteContext();
+    const mySlug = state.auth && state.auth.authenticated && state.auth.user
+      ? getHostSlug(state.auth.user.name)
+      : '';
+
+    // If viewing another person's public page, show the public host's name instead of the visitor's own name
+    if (state.publicHost && state.publicHost.hostPublicName) {
+      return sanitizePublicBrandName(state.publicHost.hostPublicName);
+    }
+    if (ctx.hostSlug && ctx.hostSlug !== mySlug) {
+      return sanitizePublicBrandName(humanizeSlug(ctx.hostSlug)) || 'Agenda de Reuniones';
+    }
+    return getHostName();
   }
 
   function getInitials(name) {
@@ -337,6 +421,23 @@
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'calendario';
+  }
+
+  function buildPublicUserUrl(customSlug) {
+    const slug = customSlug || getHostSlug();
+    const ht = state.auth?.publicHostToken || '';
+    const query = ht ? `?ht=${encodeURIComponent(ht)}` : '';
+    return `${window.location.origin}/#/user/${slug}${query}`;
+  }
+
+  function buildPublicBookUrl(eventSlug, customHostSlug) {
+    const hostSlug = customHostSlug || getHostSlug();
+    const ht = state.auth?.publicHostToken || '';
+    const params = new URLSearchParams();
+    if (hostSlug) params.set('host', hostSlug);
+    if (ht) params.set('ht', ht);
+    const qs = params.toString();
+    return `${window.location.origin}/#/book/${eventSlug}${qs ? '?' + qs : ''}`;
   }
 
   function renderAvatarElement(el, initials, picture, name) {
@@ -392,14 +493,19 @@
     if (mainName) mainName.textContent = hostName;
     if (mainSlug) mainSlug.textContent = `reuniones.io/${slug}`;
 
-    // 4. Public Profile Card
+    // 4. Public Profile Card (uses public host name when viewing another person's link)
+    const pubHostName = getPublicHostName();
+    const pubInitials = getInitials(pubHostName);
+    const isViewingOwnPublic = !isPublicRoute() || (slug === getHostSlug(pubHostName));
+    const pubPicture = isViewingOwnPublic ? picture : null;
+
     const pubAvatar = document.getElementById('public-avatar-circle');
     const pubName = document.getElementById('public-profile-name');
     const pubBio = document.getElementById('public-profile-bio');
-    renderAvatarElement(pubAvatar, initials, picture, hostName);
-    if (pubName) pubName.textContent = hostName;
+    renderAvatarElement(pubAvatar, pubInitials, pubPicture, pubHostName);
+    if (pubName) pubName.textContent = pubHostName;
     if (pubBio) {
-      pubBio.textContent = `Bienvenido a la página de programación de ${hostName}. Selecciona una de las sesiones disponibles a continuación para agendar un espacio en mi calendario.`;
+      pubBio.textContent = `Bienvenido a la página de programación de ${pubHostName}. Selecciona una de las sesiones disponibles a continuación para agendar un espacio en el calendario.`;
     }
 
     // 5. Modal Booking Host
@@ -485,6 +591,7 @@
         state.auth.authenticated = !!data.authenticated;
         state.auth.checked = true;
         state.auth.user = data.user || null;
+        state.auth.publicHostToken = data.publicHostToken || null;
         state.auth.googleConfigured = !!data.googleConfigured;
         state.auth.googleClientId = data.googleClientId || null;
 
@@ -505,6 +612,7 @@
     state.auth.authenticated = false;
     state.auth.checked = true;
     state.auth.user = null;
+    state.auth.publicHostToken = null;
     resetCalendarStateInMemory();
     updateHostProfileUI();
     return null;
@@ -651,7 +759,7 @@
     }
 
     container.innerHTML = filtered.map(ev => {
-      const publicUrl = `${window.location.origin}/#/book/${ev.slug}`;
+      const publicUrl = buildPublicBookUrl(ev.slug);
       const locationIcon = getLocationIconSvg(ev.location);
 
       return `
@@ -1134,10 +1242,52 @@
     document.getElementById('form-summary-datetime').textContent = `📅 ${dateFormatted} a las ${timeStr} (${state.bookingEvent.duration} min)`;
   }
 
+  async function submitBookingToServer(newMeeting) {
+    const ctx = getPublicRouteContext();
+    const pubHostName = getPublicHostName();
+    const targetSlug = ctx.hostSlug || getHostSlug(pubHostName);
+    const targetToken = ctx.hostToken || state.auth.publicHostToken || '';
+
+    try {
+      const res = await fetch('/api/calendar/book', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meeting: newMeeting,
+          hostSlug: targetSlug,
+          hostToken: targetToken,
+          hostName: pubHostName
+        })
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data && data.success) {
+        if (data.meeting) {
+          Object.assign(newMeeting, data.meeting);
+        }
+        // Immediately block the slot in publicHost memory so it shows as Ocupado
+        state.publicHost.scheduledMeetings = Array.isArray(state.publicHost.scheduledMeetings)
+          ? [newMeeting, ...state.publicHost.scheduledMeetings]
+          : [newMeeting];
+        const startObj = new Date(newMeeting.dateTime);
+        const endObj = new Date(startObj.getTime() + (Number(newMeeting.duration) || 30) * 60000);
+        state.publicHost.events = Array.isArray(state.publicHost.events)
+          ? [...state.publicHost.events, { start: startObj.toISOString(), end: endObj.toISOString(), status: 'CONFIRMED' }]
+          : [{ start: startObj.toISOString(), end: endObj.toISOString(), status: 'CONFIRMED' }];
+        return data;
+      }
+    } catch (e) {
+      console.warn('Error booking meeting on server:', e);
+    }
+    return null;
+  }
+
   // --- Invitee Booking Form Submission ---
   const bookingForm = document.getElementById('form-invitee-booking');
   if (bookingForm) {
-    bookingForm.addEventListener('submit', (e) => {
+    bookingForm.addEventListener('submit', async (e) => {
       e.preventDefault();
 
       const name = document.getElementById('invitee-name').value.trim();
@@ -1149,6 +1299,7 @@
       const m = String(state.selectedDate.getMonth() + 1).padStart(2, '0');
       const d = String(state.selectedDate.getDate()).padStart(2, '0');
       const dateTimeIso = `${y}-${m}-${d}T${state.selectedSlot}:00`;
+      const resolvedTz = (Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions().timeZone) || 'America/Santiago';
 
       const newMeeting = {
         id: 'meet-' + Date.now(),
@@ -1163,8 +1314,11 @@
         inviteePhone: phone,
         inviteeNotes: notes,
         dateTime: dateTimeIso,
+        timeZone: resolvedTz,
         status: 'upcoming'
       };
+
+      const bookResult = await submitBookingToServer(newMeeting);
 
       state.scheduledMeetings.unshift(newMeeting);
       saveState();
@@ -1176,7 +1330,7 @@
       document.getElementById('success-invitee-email').textContent = email;
       document.getElementById('success-event-title').textContent = state.bookingEvent.name;
       document.getElementById('success-datetime').textContent = `${y}-${m}-${d} a las ${state.selectedSlot}`;
-      document.getElementById('success-location').textContent = `${state.bookingEvent.location} (Enlace incluido en correo)`;
+      document.getElementById('success-location').textContent = `${state.bookingEvent.location} (${newMeeting.locationUrl})`;
 
       // Setup Calendar links (Google, Outlook, ICS)
       const startObj = new Date(dateTimeIso);
@@ -1184,13 +1338,15 @@
       const pad = (n) => String(n).padStart(2, '0');
       const gDate = (d) => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`;
 
-      const hostName = getHostName();
+      const hostName = getPublicHostName();
       const gCalUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(newMeeting.eventTitle + ' con ' + hostName)}&dates=${gDate(startObj)}/${gDate(endObj)}&details=${encodeURIComponent(newMeeting.inviteeNotes || 'Reunión programada')}&location=${encodeURIComponent(newMeeting.locationUrl || newMeeting.location)}`;
       const outCalUrl = `https://outlook.live.com/calendar/0/deeplink/compose?path=/calendar/action/compose&rru=addevent&subject=${encodeURIComponent(newMeeting.eventTitle + ' con ' + hostName)}&startdt=${startObj.toISOString()}&enddt=${endObj.toISOString()}&body=${encodeURIComponent(newMeeting.inviteeNotes || 'Reunión programada')}&location=${encodeURIComponent(newMeeting.locationUrl || newMeeting.location)}`;
 
       const btnG = document.getElementById('btn-add-google-cal');
       const btnO = document.getElementById('btn-add-outlook-cal');
-      if (btnG) btnG.href = gCalUrl;
+      if (btnG) {
+        btnG.href = (bookResult && bookResult.googleEventHtmlLink) ? bookResult.googleEventHtmlLink : gCalUrl;
+      }
       if (btnO) btnO.href = outCalUrl;
 
       // Setup ICS download
@@ -1198,8 +1354,11 @@
 
       // Refresh listings
       renderScheduledMeetings();
-      syncMeetingsToServer();
-      showToast('¡Reunión programada con éxito!', '🎉');
+      if (bookResult && bookResult.googleEventCreated) {
+        showToast('¡Reunión agendada automáticamente en Google Calendar!', '🎉');
+      } else {
+        showToast('¡Reunión programada con éxito!', '🎉');
+      }
     });
   }
 
@@ -1474,10 +1633,11 @@
     if (!ev) return;
 
     state.shareEvent = ev;
-    const permUrl = `${window.location.origin}/#/book/${ev.slug}`;
+    const permUrl = buildPublicBookUrl(ev.slug);
+    const sep = permUrl.includes('?') ? '&' : '?';
 
     document.getElementById('share-link-input').value = permUrl;
-    document.getElementById('single-use-link-input').value = `${permUrl}?single_use=token_${Math.random().toString(36).substring(2, 9)}`;
+    document.getElementById('single-use-link-input').value = `${permUrl}${sep}single_use=token_${Math.random().toString(36).substring(2, 9)}`;
 
     // Embed code
     const embedCode = `<!-- Widget de reserva de Reuniones -->\n<div class="reuniones-inline-widget" data-url="${permUrl}" style="min-width:320px;height:700px;"></div>\n<script type="text/javascript" src="${window.location.origin}/widget.js" async><\/script>`;
@@ -1509,9 +1669,10 @@
   });
 
   document.getElementById('btn-generate-new-single-use').addEventListener('click', () => {
-    const permUrl = `${window.location.origin}/#/book/${state.shareEvent.slug}`;
+    const permUrl = buildPublicBookUrl(state.shareEvent.slug);
+    const sep = permUrl.includes('?') ? '&' : '?';
     const token = 'token_' + Math.random().toString(36).substring(2, 9);
-    document.getElementById('single-use-link-input').value = `${permUrl}?single_use=${token}`;
+    document.getElementById('single-use-link-input').value = `${permUrl}${sep}single_use=${token}`;
     showToast('Nuevo token de un solo uso generado');
   });
 
@@ -1707,8 +1868,7 @@
 
   // Top banner copy main page link
   document.getElementById('btn-copy-main-link').addEventListener('click', () => {
-    const slug = getHostSlug();
-    copyToClipboard(`${window.location.origin}/#/user/${slug}`, 'Enlace de tu página principal copiado');
+    copyToClipboard(buildPublicUserUrl(), 'Enlace de tu página principal copiado');
   });
 
   // =========================================================================
@@ -1717,7 +1877,8 @@
   function goToPublicLanding() {
     document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
     const slug = getHostSlug();
-    window.location.hash = `#/user/${slug}`;
+    const ht = state.auth?.publicHostToken || '';
+    window.location.hash = `#/user/${slug}${ht ? '?ht=' + encodeURIComponent(ht) : ''}`;
     showPublicDirectoryMode();
     switchView('public-landing');
   }
@@ -1741,7 +1902,8 @@
     }
     if (!list) return;
 
-    if (state.googleCalendar && state.googleCalendar.connected) {
+    const isPubConnected = (state.publicHost && state.publicHost.connected) || (state.googleCalendar && state.googleCalendar.connected);
+    if (isPubConnected) {
       if (pill) pill.style.display = 'inline-flex';
       if (pillText) pillText.textContent = `Disponibilidad verificada en tiempo real con Google Calendar`;
     } else {
@@ -1805,8 +1967,13 @@
     if (dirPane) dirPane.style.display = 'none';
     if (bookPane) bookPane.style.display = 'block';
 
-    // Update URL hash cleanly without re-triggering loop
-    const targetHash = `#/book/${ev.slug}`;
+    // Preserve host and ht query parameters in the hash when opening a specific event
+    const ctx = getPublicRouteContext();
+    const params = new URLSearchParams();
+    if (ctx.hostSlug) params.set('host', ctx.hostSlug);
+    if (ctx.hostToken) params.set('ht', ctx.hostToken);
+    const qs = params.toString();
+    const targetHash = `#/book/${ev.slug}${qs ? '?' + qs : ''}`;
     if (window.location.hash !== targetHash) {
       history.replaceState(null, '', window.location.pathname + targetHash);
     }
@@ -1821,10 +1988,12 @@
     if (stepSuccess) stepSuccess.style.display = 'none';
     if (summaryRow) summaryRow.style.display = 'none';
 
-    // Populate Left Column details
-    const hostName = getHostName();
+    // Populate Left Column details using the Public Host's identity
+    const hostName = getPublicHostName();
     const initials = getInitials(hostName);
-    const picture = state.auth && state.auth.user ? state.auth.user.picture : null;
+    const mySlug = state.auth && state.auth.authenticated && state.auth.user ? getHostSlug(state.auth.user.name) : '';
+    const isOwnPage = mySlug && mySlug === getHostSlug(hostName);
+    const picture = isOwnPage && state.auth.user ? state.auth.user.picture : null;
     renderAvatarElement(document.getElementById('pub-book-host-avatar'), initials, picture, hostName);
     const hostEl = document.getElementById('pub-book-host-name');
     if (hostEl) hostEl.textContent = hostName;
@@ -1951,28 +2120,33 @@
     const selMonth = state.selectedDate.getMonth();
     const selDay = state.selectedDate.getDate();
 
+    const hostScheduled = Array.isArray(state.publicHost?.scheduledMeetings) && state.publicHost.scheduledMeetings.length > 0
+      ? state.publicHost.scheduledMeetings
+      : state.scheduledMeetings;
+
+    const hostBusyEvents = Array.isArray(state.publicHost?.events) && state.publicHost.events.length > 0
+      ? state.publicHost.events
+      : (state.googleCalendar.connected ? (state.googleCalendar.events || []) : []);
+
     list.innerHTML = slots.map(timeStr => {
       const isSelected = state.selectedSlot === timeStr;
       const [slotH, slotM] = timeStr.split(':').map(Number);
       const slotStart = new Date(selYear, selMonth, selDay, slotH, slotM, 0, 0);
       const slotEnd = new Date(slotStart.getTime() + duration * 60000);
 
-      const meetingConflict = state.scheduledMeetings.find(m => {
+      const meetingConflict = hostScheduled.find(m => {
         if (m.status !== 'upcoming') return false;
         const mStart = new Date(m.dateTime);
         const mEnd = new Date(mStart.getTime() + (m.duration || 15) * 60000);
         return slotStart < mEnd && slotEnd > mStart;
       });
 
-      let gcalConflict = null;
-      if (state.googleCalendar && state.googleCalendar.connected && state.googleCalendar.autoBlock) {
-        gcalConflict = (state.googleCalendar.events || []).find(ev => {
-          if (!ev.start || !ev.end) return false;
-          const evStart = new Date(ev.start);
-          const evEnd = new Date(ev.end);
-          return slotStart < evEnd && slotEnd > evStart;
-        });
-      }
+      const gcalConflict = hostBusyEvents.find(ev => {
+        if (!ev.start || !ev.end) return false;
+        const evStart = new Date(ev.start);
+        const evEnd = new Date(ev.end);
+        return slotStart < evEnd && slotEnd > evStart;
+      });
 
       if (meetingConflict || gcalConflict) {
         return `
@@ -2034,8 +2208,10 @@
         if (summaryRow) summaryRow.style.display = 'none';
         return;
       }
-      const slug = getHostSlug();
-      window.location.hash = `#/user/${slug}`;
+      const ctx = getPublicRouteContext();
+      const slug = ctx.hostSlug || getHostSlug(getPublicHostName());
+      const ht = ctx.hostToken || state.auth?.publicHostToken || '';
+      window.location.hash = `#/user/${slug}${ht ? '?ht=' + encodeURIComponent(ht) : ''}`;
       showPublicDirectoryMode();
     });
   }
@@ -2043,8 +2219,10 @@
   const btnScheduleAnother = document.getElementById('btn-pub-schedule-another');
   if (btnScheduleAnother) {
     btnScheduleAnother.addEventListener('click', () => {
-      const slug = getHostSlug();
-      window.location.hash = `#/user/${slug}`;
+      const ctx = getPublicRouteContext();
+      const slug = ctx.hostSlug || getHostSlug(getPublicHostName());
+      const ht = ctx.hostToken || state.auth?.publicHostToken || '';
+      window.location.hash = `#/user/${slug}${ht ? '?ht=' + encodeURIComponent(ht) : ''}`;
       showPublicDirectoryMode();
     });
   }
@@ -2086,68 +2264,96 @@
 
   const pubBookingForm = document.getElementById('pub-form-invitee-booking');
   if (pubBookingForm) {
-    pubBookingForm.addEventListener('submit', (e) => {
+    pubBookingForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!state.selectedDate || !state.selectedSlot || !state.bookingEvent) return;
 
-      const name = document.getElementById('pub-invitee-name').value.trim();
-      const email = document.getElementById('pub-invitee-email').value.trim();
-      const phone = document.getElementById('pub-invitee-phone').value.trim();
-      const notes = document.getElementById('pub-invitee-notes').value.trim();
+      const submitBtn = pubBookingForm.querySelector('button[type="submit"]');
+      const origBtnText = submitBtn ? submitBtn.textContent : 'Programar evento';
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = '⏳ Agendando en el calendario...';
+      }
 
-      const y = state.selectedDate.getFullYear();
-      const m = String(state.selectedDate.getMonth() + 1).padStart(2, '0');
-      const d = String(state.selectedDate.getDate()).padStart(2, '0');
-      const dateTimeIso = `${y}-${m}-${d}T${state.selectedSlot}:00`;
+      try {
+        const name = document.getElementById('pub-invitee-name').value.trim();
+        const email = document.getElementById('pub-invitee-email').value.trim();
+        const phone = document.getElementById('pub-invitee-phone').value.trim();
+        const notes = document.getElementById('pub-invitee-notes').value.trim();
 
-      const newMeeting = {
-        id: 'meet-' + Date.now(),
-        eventTypeId: state.bookingEvent.id,
-        eventTitle: state.bookingEvent.name,
-        eventColor: state.bookingEvent.color,
-        duration: state.bookingEvent.duration,
-        location: state.bookingEvent.location,
-        locationUrl: 'https://meet.google.com/' + Math.random().toString(36).substring(2, 5) + '-' + Math.random().toString(36).substring(2, 6) + '-' + Math.random().toString(36).substring(2, 5),
-        inviteeName: name,
-        inviteeEmail: email,
-        inviteePhone: phone,
-        inviteeNotes: notes,
-        dateTime: dateTimeIso,
-        status: 'upcoming'
-      };
+        const y = state.selectedDate.getFullYear();
+        const m = String(state.selectedDate.getMonth() + 1).padStart(2, '0');
+        const d = String(state.selectedDate.getDate()).padStart(2, '0');
+        const dateTimeIso = `${y}-${m}-${d}T${state.selectedSlot}:00`;
+        const resolvedTz = (Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions().timeZone) || 'America/Santiago';
 
-      state.scheduledMeetings.unshift(newMeeting);
-      saveState();
+        const newMeeting = {
+          id: 'meet-' + Date.now(),
+          eventTypeId: state.bookingEvent.id,
+          eventTitle: state.bookingEvent.name,
+          eventColor: state.bookingEvent.color,
+          duration: state.bookingEvent.duration,
+          location: state.bookingEvent.location,
+          locationUrl: 'https://meet.google.com/' + Math.random().toString(36).substring(2, 5) + '-' + Math.random().toString(36).substring(2, 6) + '-' + Math.random().toString(36).substring(2, 5),
+          inviteeName: name,
+          inviteeEmail: email,
+          inviteePhone: phone,
+          inviteeNotes: notes,
+          dateTime: dateTimeIso,
+          timeZone: resolvedTz,
+          status: 'upcoming'
+        };
 
-      document.getElementById('pub-step-form').style.display = 'none';
-      document.getElementById('pub-step-success').style.display = 'flex';
+        const bookResult = await submitBookingToServer(newMeeting);
 
-      const hostName = getHostName();
-      document.getElementById('pub-success-email').textContent = email;
-      document.getElementById('pub-success-title').textContent = state.bookingEvent.name;
-      document.getElementById('pub-success-host').textContent = hostName;
-      document.getElementById('pub-success-datetime').textContent = document.getElementById('pub-selected-datetime-text').textContent;
-      document.getElementById('pub-success-location').textContent = `${state.bookingEvent.location} (${newMeeting.locationUrl})`;
+        state.scheduledMeetings.unshift(newMeeting);
+        saveState();
 
-      const startObj = new Date(dateTimeIso);
-      const endObj = new Date(startObj.getTime() + state.bookingEvent.duration * 60000);
-      const pad = (n) => String(n).padStart(2, '0');
-      const gDate = (dt) => `${dt.getUTCFullYear()}${pad(dt.getUTCMonth() + 1)}${pad(dt.getUTCDate())}T${pad(dt.getUTCHours())}${pad(dt.getUTCMinutes())}00Z`;
+        document.getElementById('pub-step-form').style.display = 'none';
+        document.getElementById('pub-step-success').style.display = 'flex';
 
-      const gCalUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(newMeeting.eventTitle + ' con ' + hostName)}&dates=${gDate(startObj)}/${gDate(endObj)}&details=${encodeURIComponent(newMeeting.inviteeNotes || 'Reunión programada')}&location=${encodeURIComponent(newMeeting.locationUrl || newMeeting.location)}`;
-      const outCalUrl = `https://outlook.live.com/calendar/0/deeplink/compose?path=/calendar/action/compose&rru=addevent&subject=${encodeURIComponent(newMeeting.eventTitle + ' con ' + hostName)}&startdt=${startObj.toISOString()}&enddt=${endObj.toISOString()}&body=${encodeURIComponent(newMeeting.inviteeNotes || 'Reunión programada')}&location=${encodeURIComponent(newMeeting.locationUrl || newMeeting.location)}`;
+        const hostName = getPublicHostName();
+        document.getElementById('pub-success-email').textContent = email;
+        document.getElementById('pub-success-title').textContent = state.bookingEvent.name;
+        document.getElementById('pub-success-host').textContent = hostName;
+        document.getElementById('pub-success-datetime').textContent = document.getElementById('pub-selected-datetime-text').textContent;
+        document.getElementById('pub-success-location').textContent = `${state.bookingEvent.location} (${newMeeting.locationUrl})`;
 
-      const btnG = document.getElementById('pub-btn-add-gcal');
-      const btnO = document.getElementById('pub-btn-add-outlook');
-      if (btnG) btnG.href = gCalUrl;
-      if (btnO) btnO.href = outCalUrl;
+        const startObj = new Date(dateTimeIso);
+        const endObj = new Date(startObj.getTime() + state.bookingEvent.duration * 60000);
+        const pad = (n) => String(n).padStart(2, '0');
+        const gDate = (dt) => `${dt.getUTCFullYear()}${pad(dt.getUTCMonth() + 1)}${pad(dt.getUTCDate())}T${pad(dt.getUTCHours())}${pad(dt.getUTCMinutes())}00Z`;
 
-      const btnIcs = document.getElementById('pub-btn-download-ics');
-      if (btnIcs) btnIcs.onclick = () => downloadIcsFile(newMeeting);
+        const gCalUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(newMeeting.eventTitle + ' con ' + hostName)}&dates=${gDate(startObj)}/${gDate(endObj)}&details=${encodeURIComponent((newMeeting.inviteeNotes || 'Reunión programada') + '\nInvitado: ' + name + ' (' + email + ')')}&location=${encodeURIComponent(newMeeting.locationUrl || newMeeting.location)}&add=${encodeURIComponent(email)}`;
+        const outCalUrl = `https://outlook.live.com/calendar/0/deeplink/compose?path=/calendar/action/compose&rru=addevent&subject=${encodeURIComponent(newMeeting.eventTitle + ' con ' + hostName)}&startdt=${startObj.toISOString()}&enddt=${endObj.toISOString()}&body=${encodeURIComponent(newMeeting.inviteeNotes || 'Reunión programada')}&location=${encodeURIComponent(newMeeting.locationUrl || newMeeting.location)}`;
 
-      renderScheduledMeetings();
-      syncMeetingsToServer();
-      showToast('¡Reunión confirmada en el calendario!', '🎉');
+        const btnG = document.getElementById('pub-btn-add-gcal');
+        const btnO = document.getElementById('pub-btn-add-outlook');
+        if (btnG) {
+          btnG.href = (bookResult && bookResult.googleEventHtmlLink) ? bookResult.googleEventHtmlLink : gCalUrl;
+          btnG.textContent = (bookResult && bookResult.googleEventCreated)
+            ? '✓ Agendado en Google Calendar (Ver evento)'
+            : '📅 Guardar en mi Google Calendar';
+        }
+        if (btnO) btnO.href = outCalUrl;
+
+        const btnIcs = document.getElementById('pub-btn-download-ics');
+        if (btnIcs) btnIcs.onclick = () => downloadIcsFile(newMeeting);
+
+        renderScheduledMeetings();
+
+        if (bookResult && bookResult.googleEventCreated) {
+          showToast('¡Reunión agendada automáticamente en Google Calendar!', '🎉');
+        } else {
+          showToast('¡Reunión registrada! Abriendo Google Calendar para confirmar en tu agenda...', '🎉');
+          window.open(gCalUrl, '_blank', 'noopener,noreferrer');
+        }
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = origBtnText;
+        }
+      }
     });
   }
 
@@ -2178,8 +2384,7 @@
   const copyPubBtn = document.getElementById('btn-copy-public-page-url');
   if (copyPubBtn) {
     copyPubBtn.addEventListener('click', () => {
-      const slug = getHostSlug();
-      copyToClipboard(`${window.location.origin}/#/user/${slug}`, 'Enlace de tu página pública copiado');
+      copyToClipboard(buildPublicUserUrl(), 'Enlace de tu página pública copiado');
     });
   }
 
@@ -2221,7 +2426,47 @@
     btn.addEventListener('click', () => switchGCalTab(btn.getAttribute('data-gcal-tab')));
   });
 
+  async function fetchPublicHostCalendarStatus() {
+    const ctx = getPublicRouteContext();
+    const params = new URLSearchParams({ public: '1' });
+    if (ctx.hostSlug) params.set('slug', ctx.hostSlug);
+    if (ctx.hostToken) params.set('ht', ctx.hostToken);
+
+    try {
+      const res = await fetch(`/api/calendar/status?${params.toString()}`, {
+        method: 'GET',
+        credentials: 'same-origin',
+        cache: 'no-store'
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.success) {
+        state.publicHost = {
+          connected: !!data.connected,
+          hostPublicName: data.hostPublicName || (ctx.hostSlug ? humanizeSlug(ctx.hostSlug) : null),
+          hostSlug: data.hostSlug || ctx.hostSlug || null,
+          autoBlock: data.autoBlock !== false,
+          events: Array.isArray(data.events) ? data.events : [],
+          scheduledMeetings: Array.isArray(data.scheduledMeetings) ? data.scheduledMeetings : []
+        };
+        updateHostProfileUI();
+        if (state.activeAppView === 'public-landing') {
+          renderPublicLandingView();
+          if (state.selectedDate) {
+            renderPublicTimeSlots();
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Could not fetch public host calendar status:', e);
+    }
+  }
+
   async function fetchCalendarStatus() {
+    if (isPublicRoute()) {
+      await fetchPublicHostCalendarStatus();
+    }
+
     if (!state.auth.authenticated || !state.auth.user) {
       resetCalendarStateInMemory();
       updateGoogleCalendarUI();
@@ -2240,6 +2485,9 @@
       if (!res.ok) return;
       const data = await res.json();
       if (data.success) {
+        if (data.publicHostToken) {
+          state.auth.publicHostToken = data.publicHostToken;
+        }
         // If server is disconnected ONLY because of a serverless cold start,
         // restore ONLY if THIS specific user had previously connected in this browser.
         if (!data.connected && localMeta && localMeta.connected && localMeta.userKey === userKey) {
@@ -2802,9 +3050,11 @@
 
     // 1. Public Direct Event Booking Link (#/book/:slug or /book/:slug)
     if (hash.startsWith('#/book/') || path.startsWith('/book/')) {
+      const ctx = getPublicRouteContext();
       const rawSlug = hash.startsWith('#/book/') ? hash.replace('#/book/', '') : path.replace('/book/', '');
-      const cleanSlug = rawSlug.split('?')[0];
+      const cleanSlug = ctx.eventSlug || rawSlug.split('?')[0];
       document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
+      fetchPublicHostCalendarStatus();
       switchView('public-landing');
       openPublicEventBooking(cleanSlug);
       return;
@@ -2813,6 +3063,7 @@
     // 2. Public Host Profile Directory (#public, #/user/:slug, /public, /user/:slug)
     if (hash === '#public' || hash.startsWith('#/user') || path === '/public' || path.startsWith('/user/')) {
       document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
+      fetchPublicHostCalendarStatus();
       showPublicDirectoryMode();
       switchView('public-landing');
       return;
