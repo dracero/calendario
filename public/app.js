@@ -2039,7 +2039,6 @@
     // Populate Left Column details using the Public Host's identity
     const hostName = getPublicHostName();
     const initials = getInitials(hostName);
-    const mySlug = state.auth && state.auth.authenticated && state.auth.user ? getHostSlug(state.auth.user.name) : '';
     const isOwnPage = mySlug && mySlug === getHostSlug(hostName);
     const picture = isOwnPage && state.auth.user ? state.auth.user.picture : null;
     renderAvatarElement(document.getElementById('pub-book-host-avatar'), initials, picture, hostName);
