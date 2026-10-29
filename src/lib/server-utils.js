@@ -149,10 +149,14 @@ export function getRedirectUri(request) {
 }
 
 
-export function loadSyncConfig() {
+export function loadSyncConfig(userId = null) {
   try {
     if (fs.existsSync(SYNC_FILE)) {
-      return JSON.parse(fs.readFileSync(SYNC_FILE, 'utf-8'));
+      const data = JSON.parse(fs.readFileSync(SYNC_FILE, 'utf-8'));
+      if (userId && data.byUser && data.byUser[userId]) {
+        return data.byUser[userId];
+      }
+      return data;
     }
   } catch (e) {
     console.error('Error reading sync file:', e);
@@ -160,16 +164,35 @@ export function loadSyncConfig() {
   return {
     connected: false,
     calendarName: null,
+    hostPublicName: null,
     lastSync: null,
     autoBlock: true,
     icalUrl: '',
-    events: []
+    events: [],
+    byUser: {}
   };
 }
 
-export function saveSyncConfig(config) {
+export function saveSyncConfig(config, userId = null) {
   try {
-    fs.writeFileSync(SYNC_FILE, JSON.stringify(config, null, 2), 'utf-8');
+    let existing = {};
+    if (fs.existsSync(SYNC_FILE)) {
+      try {
+        existing = JSON.parse(fs.readFileSync(SYNC_FILE, 'utf-8'));
+      } catch {
+        existing = {};
+      }
+    }
+    const byUser = existing.byUser || {};
+    if (userId) {
+      byUser[userId] = { ...config };
+    }
+    const payload = {
+      ...existing,
+      ...config,
+      byUser
+    };
+    fs.writeFileSync(SYNC_FILE, JSON.stringify(payload, null, 2), 'utf-8');
   } catch (e) {
     console.error('Error saving sync file:', e);
   }

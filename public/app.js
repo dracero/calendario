@@ -148,7 +148,7 @@
     currentFilter: 'all',
     searchQuery: '',
     viewMode: 'grid', // 'grid' | 'list'
-    activeAppView: 'event-types',
+    activeAppView: 'login',
     scheduledFilter: 'upcoming',
     // Booking flow state
     bookingEvent: null,
@@ -161,6 +161,7 @@
     googleCalendar: {
       connected: false,
       calendarName: null,
+      hostPublicName: null,
       lastSync: null,
       autoBlock: true,
       icalUrl: '',
@@ -170,6 +171,7 @@
     // Authentication State (Google OAuth / Calendly Clone)
     auth: {
       authenticated: false,
+      checked: false,
       user: null,
       googleConfigured: false,
       googleClientId: null
@@ -249,13 +251,13 @@
     }
   }
 
-  // --- Dynamic Host Information based on Google Auth or Calendar Name ---
+  // --- Dynamic Host Information based on Per-Browser Session Auth ---
   function getHostName() {
     if (state.auth && state.auth.authenticated && state.auth.user && state.auth.user.name) {
       return state.auth.user.name.trim();
     }
-    if (state.googleCalendar && state.googleCalendar.calendarName && state.googleCalendar.calendarName.trim()) {
-      return state.googleCalendar.calendarName.trim();
+    if (state.googleCalendar && state.googleCalendar.hostPublicName && state.googleCalendar.hostPublicName.trim()) {
+      return state.googleCalendar.hostPublicName.trim();
     }
     return 'Alex Calendly';
   }
@@ -389,13 +391,32 @@
     }
   }
 
-  // --- Google Authentication System (Calendly Clone) ---
+  // --- Google Authentication System (Calendly Clone - Per-Browser Session Strategy) ---
+  function isPublicRoute() {
+    const hash = window.location.hash || '';
+    const path = window.location.pathname || '';
+    return (
+      hash === '#public' ||
+      hash.startsWith('#/user') ||
+      hash.startsWith('#/book/') ||
+      path === '/public' ||
+      path.startsWith('/user/') ||
+      path.startsWith('/book/')
+    );
+  }
+
   async function checkAuthStatus() {
     try {
-      const res = await fetch('/api/auth/me');
+      const res = await fetch('/api/auth/me', {
+        method: 'GET',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' }
+      });
       if (res.ok) {
         const data = await res.json();
         state.auth.authenticated = !!data.authenticated;
+        state.auth.checked = true;
         state.auth.user = data.user || null;
         state.auth.googleConfigured = !!data.googleConfigured;
         state.auth.googleClientId = data.googleClientId || null;
@@ -405,6 +426,10 @@
     } catch (e) {
       console.warn('Could not check auth status:', e);
     }
+    state.auth.authenticated = false;
+    state.auth.checked = true;
+    state.auth.user = null;
+    updateHostProfileUI();
     return null;
   }
 
@@ -422,6 +447,8 @@
     try {
       const res = await fetch('/api/auth/demo-login', {
         method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: 'Alex Calendly',
@@ -430,11 +457,11 @@
       });
       const data = await res.json();
       if (data.success) {
-        showToast('¡Sesión iniciada con Cuenta Google!', '✓');
+        showToast('¡Sesión iniciada en este navegador!', '✓');
         await checkAuthStatus();
-        fetchCalendarStatus();
+        await fetchCalendarStatus();
+        window.location.hash = '#meeting_types';
         switchView('event-types');
-        window.location.hash = '';
       }
     } catch (err) {
       showToast('Error al iniciar demo: ' + err.message, '⚠️');
@@ -443,15 +470,20 @@
 
   async function logoutUser() {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store'
+      });
       state.auth.authenticated = false;
       state.auth.user = null;
+      state.googleCalendar.calendarName = null;
       updateHostProfileUI();
-      showToast('Has cerrado sesión correctamente', '✓');
+      showToast('Has cerrado sesión en este navegador', '✓');
       const dropdown = document.getElementById('user-profile-dropdown');
       if (dropdown) dropdown.classList.remove('show');
-      switchView('login');
       window.location.hash = '#login';
+      switchView('login');
     } catch (err) {
       showToast('Error al cerrar sesión', '⚠️');
     }
@@ -1417,6 +1449,12 @@
   });
 
   function switchView(viewKey) {
+    // Route Guard: Unauthenticated browsers can ONLY access 'login' or 'public-landing'
+    const adminViews = ['event-types', 'scheduled-events', 'availability', 'workflows'];
+    if (adminViews.includes(viewKey) && state.auth.checked && !state.auth.authenticated) {
+      viewKey = 'login';
+    }
+
     document.querySelectorAll('.nav-tab-btn').forEach(b => {
       b.classList.toggle('active', b.getAttribute('data-view') === viewKey);
     });
@@ -1434,6 +1472,13 @@
 
     state.activeAppView = viewKey;
     document.body.classList.toggle('auth-view', viewKey === 'login');
+    document.body.classList.toggle('public-view', viewKey === 'public-landing');
+
+    // Show/hide host admin preview banner on public page based on whether this browser is authenticated
+    const adminBanner = document.getElementById('public-admin-banner');
+    if (adminBanner) {
+      adminBanner.style.display = (viewKey === 'public-landing' && state.auth.authenticated) ? 'flex' : 'none';
+    }
 
     const profileDrop = document.getElementById('user-profile-dropdown');
     if (profileDrop) profileDrop.classList.remove('show');
@@ -1559,13 +1604,23 @@
     copyToClipboard(`${window.location.origin}/#/user/${slug}`, 'Enlace de tu página principal copiado');
   });
 
-  // Public Landing Functions
+  // =========================================================================
+  // ORIGINAL CALENDLY PUBLIC PROFILE & INLINE SPLIT-SCREEN BOOKING PAGE
+  // =========================================================================
   function goToPublicLanding() {
-    // Close any open modals first
     document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
     const slug = getHostSlug();
     window.location.hash = `#/user/${slug}`;
+    showPublicDirectoryMode();
     switchView('public-landing');
+  }
+
+  function showPublicDirectoryMode() {
+    const dirPane = document.getElementById('public-directory-pane');
+    const bookPane = document.getElementById('public-booking-pane');
+    if (dirPane) dirPane.style.display = 'flex';
+    if (bookPane) bookPane.style.display = 'none';
+    renderPublicLandingView();
   }
 
   function renderPublicLandingView() {
@@ -1573,56 +1628,435 @@
     const list = document.getElementById('public-events-list-container');
     const pill = document.getElementById('public-cal-pill');
     const pillText = document.getElementById('public-cal-pill-text');
+    const adminBanner = document.getElementById('public-admin-banner');
+    if (adminBanner) {
+      adminBanner.style.display = state.auth.authenticated ? 'flex' : 'none';
+    }
     if (!list) return;
 
     if (state.googleCalendar && state.googleCalendar.connected) {
       if (pill) pill.style.display = 'inline-flex';
-      if (pillText) pillText.textContent = `Sincronizado con Google Calendar (${getHostName()})`;
+      if (pillText) pillText.textContent = `Disponibilidad verificada en tiempo real con Google Calendar`;
     } else {
       if (pill) pill.style.display = 'none';
     }
 
     const activeEvents = state.eventTypes.filter(e => e.active);
     if (activeEvents.length === 0) {
-      list.innerHTML = `<p class="form-hint" style="text-align: center; padding: 40px 0;">No hay tipos de reunión activos actualmente.</p>`;
+      list.innerHTML = `<p class="form-hint" style="grid-column: 1 / -1; text-align: center; padding: 40px 0;">No hay tipos de reunión activos actualmente.</p>`;
       return;
     }
 
     list.innerHTML = activeEvents.map(ev => `
-      <div class="public-event-row" onclick="window.ReunionesApp.openBookingModal('${ev.id}')">
-        <div class="public-event-indicator" style="background: ${ev.color || 'var(--primary)'};"></div>
-        <div class="public-event-details">
-          <h3 class="public-event-title">${escapeHtml(ev.name)}</h3>
-          <div class="public-event-meta">
-            <span class="meta-item">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"></circle>
-                <polyline points="12 6 12 12 16 14"></polyline>
-              </svg>
-              ${ev.duration} min
-            </span>
-            <span class="meta-item">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polygon points="23 7 16 12 23 17 23 7"></polygon>
-                <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
-              </svg>
-              ${escapeHtml(ev.location)}
-            </span>
+      <div class="calendly-public-event-card" onclick="window.ReunionesApp.openPublicEventBooking('${ev.id}')">
+        <div>
+          <div class="calendly-public-event-top">
+            <div class="calendly-public-event-title-wrap">
+              <span class="calendly-event-color-dot" style="background: ${ev.color || 'var(--primary)'};"></span>
+              <h3 class="calendly-public-event-name">${escapeHtml(ev.name)}</h3>
+            </div>
+            <span class="calendly-public-event-arrow">&rarr;</span>
           </div>
-          <p class="public-event-desc">${escapeHtml(ev.description || 'Llamada rápida para coordinar detalles y siguientes pasos.')}</p>
+          <p class="calendly-public-event-desc">${escapeHtml(ev.description || 'Agenda una sesión en el horario disponible que mejor te acomode.')}</p>
         </div>
-        <button class="btn-primary public-event-book-btn" onclick="event.stopPropagation(); window.ReunionesApp.openBookingModal('${ev.id}')">
-          Reservar &rarr;
-        </button>
+        <div class="calendly-public-event-meta">
+          <span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+            ${ev.duration} min
+          </span>
+          <span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="23 7 16 12 23 17 23 7"></polygon>
+              <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+            </svg>
+            ${escapeHtml(ev.location)}
+          </span>
+        </div>
       </div>
     `).join('');
   }
 
-  // Public Landing Button in Header
+  function openPublicEventBooking(eventIdOrSlug) {
+    const ev = state.eventTypes.find(e => e.id === eventIdOrSlug || e.slug === eventIdOrSlug) || state.eventTypes[0];
+    if (!ev) return;
+
+    state.bookingEvent = ev;
+    state.selectedDate = null;
+    state.selectedSlot = null;
+    state.currentCalDate = new Date();
+
+    // Ensure we are on the standalone public-landing view
+    if (state.activeAppView !== 'public-landing') {
+      switchView('public-landing');
+    }
+
+    const dirPane = document.getElementById('public-directory-pane');
+    const bookPane = document.getElementById('public-booking-pane');
+    if (dirPane) dirPane.style.display = 'none';
+    if (bookPane) bookPane.style.display = 'block';
+
+    // Update URL hash cleanly without re-triggering loop
+    const targetHash = `#/book/${ev.slug}`;
+    if (window.location.hash !== targetHash) {
+      history.replaceState(null, '', window.location.pathname + targetHash);
+    }
+
+    // Reset steps inside inline split view
+    const stepCal = document.getElementById('pub-step-calendar');
+    const stepForm = document.getElementById('pub-step-form');
+    const stepSuccess = document.getElementById('pub-step-success');
+    const summaryRow = document.getElementById('pub-selected-datetime-summary');
+    if (stepCal) stepCal.style.display = 'flex';
+    if (stepForm) stepForm.style.display = 'none';
+    if (stepSuccess) stepSuccess.style.display = 'none';
+    if (summaryRow) summaryRow.style.display = 'none';
+
+    // Populate Left Column details
+    const hostName = getHostName();
+    const initials = getInitials(hostName);
+    const picture = state.auth && state.auth.user ? state.auth.user.picture : null;
+    renderAvatarElement(document.getElementById('pub-book-host-avatar'), initials, picture, hostName);
+    const hostEl = document.getElementById('pub-book-host-name');
+    if (hostEl) hostEl.textContent = hostName;
+
+    const titleEl = document.getElementById('pub-book-event-title');
+    const durEl = document.getElementById('pub-book-event-duration');
+    const locEl = document.getElementById('pub-book-event-location');
+    const descEl = document.getElementById('pub-book-event-desc');
+    if (titleEl) titleEl.textContent = ev.name;
+    if (durEl) durEl.textContent = `${ev.duration} min`;
+    if (locEl) locEl.textContent = `${ev.location} (Los detalles de la conferencia web se proporcionan en la confirmación)`;
+    if (descEl) descEl.textContent = ev.description || 'Agenda una reunión en el horario disponible que mejor te acomode.';
+
+    renderPublicCalendar();
+    renderPublicTimeSlots();
+  }
+
+  function renderPublicCalendar() {
+    const monthLabel = document.getElementById('pub-calendar-month-label');
+    const grid = document.getElementById('pub-calendar-days-grid');
+    if (!grid || !monthLabel) return;
+
+    const year = state.currentCalDate.getFullYear();
+    const month = state.currentCalDate.getMonth();
+
+    const monthNames = [
+      'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+      'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+    ];
+    monthLabel.textContent = `${monthNames[month]} ${year}`;
+
+    const dayHeaders = ['LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB', 'DOM'];
+    let html = dayHeaders.map(h => `<div class="cal-day-header">${h}</div>`).join('');
+
+    const firstDayIndex = new Date(year, month, 1).getDay();
+    const startDay = (firstDayIndex + 6) % 7;
+    const totalDays = new Date(year, month + 1, 0).getDate();
+
+    for (let i = 0; i < startDay; i++) {
+      html += `<div class="cal-day-cell empty"></div>`;
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    for (let day = 1; day <= totalDays; day++) {
+      const cellDate = new Date(year, month, day);
+      cellDate.setHours(0, 0, 0, 0);
+
+      const isPast = cellDate < today;
+      const dayOfWeek = (cellDate.getDay() + 6) % 7;
+      const daySchedule = state.weeklySchedule[dayOfWeek];
+      const isDayOff = !daySchedule || !daySchedule.active;
+
+      const isDisabled = isPast || isDayOff;
+      const isSelected = state.selectedDate &&
+        state.selectedDate.getFullYear() === year &&
+        state.selectedDate.getMonth() === month &&
+        state.selectedDate.getDate() === day;
+
+      const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+      html += `
+        <div class="cal-day-cell ${isDisabled ? 'disabled' : ''} ${isSelected ? 'selected' : ''}"
+             data-date="${dateStr}"
+             onclick="window.ReunionesApp.selectPublicBookingDate('${dateStr}', this)">
+          ${day}
+        </div>
+      `;
+    }
+
+    grid.innerHTML = html;
+  }
+
+  function selectPublicBookingDate(dateStr, cellEl) {
+    document.querySelectorAll('#pub-calendar-days-grid .cal-day-cell.selected').forEach(c => c.classList.remove('selected'));
+    if (cellEl) cellEl.classList.add('selected');
+
+    const [y, m, d] = dateStr.split('-').map(Number);
+    state.selectedDate = new Date(y, m - 1, d);
+    state.selectedSlot = null;
+
+    renderPublicTimeSlots();
+  }
+
+  function renderPublicTimeSlots() {
+    const list = document.getElementById('pub-time-slots-list');
+    const headerDate = document.getElementById('pub-selected-date-label');
+    if (!list || !headerDate) return;
+
+    if (!state.selectedDate) {
+      headerDate.textContent = 'Selecciona un día';
+      list.innerHTML = `<p class="form-hint" style="text-align: center; margin-top: 30px;">Haz clic en una fecha disponible del calendario para ver los horarios.</p>`;
+      return;
+    }
+
+    const days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+    const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    headerDate.textContent = `${days[state.selectedDate.getDay()]}, ${state.selectedDate.getDate()} de ${months[state.selectedDate.getMonth()]}`;
+
+    const dayOfWeek = (state.selectedDate.getDay() + 6) % 7;
+    const schedule = state.weeklySchedule[dayOfWeek];
+    if (!schedule || !schedule.active) {
+      list.innerHTML = `<p class="form-hint" style="text-align: center; margin-top: 20px;">No hay horarios disponibles para este día.</p>`;
+      return;
+    }
+
+    const duration = (state.bookingEvent && state.bookingEvent.duration) || 15;
+    const [startH, startM] = schedule.start.split(':').map(Number);
+    const [endH, endM] = schedule.end.split(':').map(Number);
+
+    const startMinutes = startH * 60 + startM;
+    const endMinutes = endH * 60 + endM;
+
+    const slots = [];
+    for (let m = startMinutes; m + duration <= endMinutes; m += duration >= 30 ? 30 : 15) {
+      const h = Math.floor(m / 60);
+      const min = m % 60;
+      const timeStr = `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+      slots.push(timeStr);
+    }
+
+    const selYear = state.selectedDate.getFullYear();
+    const selMonth = state.selectedDate.getMonth();
+    const selDay = state.selectedDate.getDate();
+
+    list.innerHTML = slots.map(timeStr => {
+      const isSelected = state.selectedSlot === timeStr;
+      const [slotH, slotM] = timeStr.split(':').map(Number);
+      const slotStart = new Date(selYear, selMonth, selDay, slotH, slotM, 0, 0);
+      const slotEnd = new Date(slotStart.getTime() + duration * 60000);
+
+      const meetingConflict = state.scheduledMeetings.find(m => {
+        if (m.status !== 'upcoming') return false;
+        const mStart = new Date(m.dateTime);
+        const mEnd = new Date(mStart.getTime() + (m.duration || 15) * 60000);
+        return slotStart < mEnd && slotEnd > mStart;
+      });
+
+      let gcalConflict = null;
+      if (state.googleCalendar && state.googleCalendar.connected && state.googleCalendar.autoBlock) {
+        gcalConflict = (state.googleCalendar.events || []).find(ev => {
+          if (!ev.start || !ev.end) return false;
+          const evStart = new Date(ev.start);
+          const evEnd = new Date(ev.end);
+          return slotStart < evEnd && slotEnd > evStart;
+        });
+      }
+
+      if (meetingConflict || gcalConflict) {
+        return `
+          <div class="slot-item-wrapper">
+            <button type="button" class="slot-btn slot-busy" disabled title="Horario ocupado en el calendario del anfitrión">
+              ${timeStr} <span class="slot-busy-indicator">Ocupado</span>
+            </button>
+          </div>
+        `;
+      }
+
+      return `
+        <div class="slot-item-wrapper">
+          <button type="button" class="slot-btn ${isSelected ? 'selected' : ''}" onclick="window.ReunionesApp.choosePublicSlot('${timeStr}')">
+            ${timeStr}
+          </button>
+          ${isSelected ? `
+            <button type="button" class="slot-confirm-btn" onclick="window.ReunionesApp.proceedToPublicBookingForm('${timeStr}')">
+              Siguiente
+            </button>
+          ` : ''}
+        </div>
+      `;
+    }).join('');
+  }
+
+  function choosePublicSlot(timeStr) {
+    state.selectedSlot = timeStr;
+    renderPublicTimeSlots();
+  }
+
+  function proceedToPublicBookingForm(timeStr) {
+    state.selectedSlot = timeStr;
+    const stepCal = document.getElementById('pub-step-calendar');
+    const stepForm = document.getElementById('pub-step-form');
+    if (stepCal) stepCal.style.display = 'none';
+    if (stepForm) stepForm.style.display = 'flex';
+
+    const days = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+    const months = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+    const dateFormatted = `${timeStr}, ${days[state.selectedDate.getDay()]}, ${state.selectedDate.getDate()} de ${months[state.selectedDate.getMonth()]} de ${state.selectedDate.getFullYear()}`;
+
+    const summaryRow = document.getElementById('pub-selected-datetime-summary');
+    const summaryText = document.getElementById('pub-selected-datetime-text');
+    if (summaryRow) summaryRow.style.display = 'flex';
+    if (summaryText) summaryText.textContent = dateFormatted;
+  }
+
+  // Public Back Button (Step 2 -> Step 1, or Step 1 -> Host Profile Directory)
+  const btnPubBack = document.getElementById('btn-pub-back-to-directory');
+  if (btnPubBack) {
+    btnPubBack.addEventListener('click', () => {
+      const stepForm = document.getElementById('pub-step-form');
+      const stepCal = document.getElementById('pub-step-calendar');
+      const summaryRow = document.getElementById('pub-selected-datetime-summary');
+      if (stepForm && stepForm.style.display !== 'none') {
+        stepForm.style.display = 'none';
+        if (stepCal) stepCal.style.display = 'flex';
+        if (summaryRow) summaryRow.style.display = 'none';
+        return;
+      }
+      const slug = getHostSlug();
+      window.location.hash = `#/user/${slug}`;
+      showPublicDirectoryMode();
+    });
+  }
+
+  const btnScheduleAnother = document.getElementById('btn-pub-schedule-another');
+  if (btnScheduleAnother) {
+    btnScheduleAnother.addEventListener('click', () => {
+      const slug = getHostSlug();
+      window.location.hash = `#/user/${slug}`;
+      showPublicDirectoryMode();
+    });
+  }
+
+  const btnToggleGuests = document.getElementById('btn-pub-toggle-guests');
+  if (btnToggleGuests) {
+    btnToggleGuests.addEventListener('click', () => {
+      const box = document.getElementById('pub-guests-box');
+      if (box) {
+        box.style.display = box.style.display === 'none' ? 'block' : 'none';
+        btnToggleGuests.style.display = 'none';
+      }
+    });
+  }
+
+  const pubPrevMonth = document.getElementById('pub-cal-prev-month');
+  const pubNextMonth = document.getElementById('pub-cal-next-month');
+  if (pubPrevMonth) {
+    pubPrevMonth.addEventListener('click', () => {
+      state.currentCalDate.setMonth(state.currentCalDate.getMonth() - 1);
+      renderPublicCalendar();
+    });
+  }
+  if (pubNextMonth) {
+    pubNextMonth.addEventListener('click', () => {
+      state.currentCalDate.setMonth(state.currentCalDate.getMonth() + 1);
+      renderPublicCalendar();
+    });
+  }
+
+  const pubTzSelect = document.getElementById('pub-timezone-select');
+  if (pubTzSelect) {
+    pubTzSelect.addEventListener('change', () => {
+      const label = pubTzSelect.options[pubTzSelect.selectedIndex].text;
+      const metaTz = document.getElementById('pub-book-tz-meta');
+      if (metaTz) metaTz.textContent = label;
+    });
+  }
+
+  const pubBookingForm = document.getElementById('pub-form-invitee-booking');
+  if (pubBookingForm) {
+    pubBookingForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!state.selectedDate || !state.selectedSlot || !state.bookingEvent) return;
+
+      const name = document.getElementById('pub-invitee-name').value.trim();
+      const email = document.getElementById('pub-invitee-email').value.trim();
+      const phone = document.getElementById('pub-invitee-phone').value.trim();
+      const notes = document.getElementById('pub-invitee-notes').value.trim();
+
+      const y = state.selectedDate.getFullYear();
+      const m = String(state.selectedDate.getMonth() + 1).padStart(2, '0');
+      const d = String(state.selectedDate.getDate()).padStart(2, '0');
+      const dateTimeIso = `${y}-${m}-${d}T${state.selectedSlot}:00`;
+
+      const newMeeting = {
+        id: 'meet-' + Date.now(),
+        eventTypeId: state.bookingEvent.id,
+        eventTitle: state.bookingEvent.name,
+        eventColor: state.bookingEvent.color,
+        duration: state.bookingEvent.duration,
+        location: state.bookingEvent.location,
+        locationUrl: 'https://meet.google.com/' + Math.random().toString(36).substring(2, 5) + '-' + Math.random().toString(36).substring(2, 6) + '-' + Math.random().toString(36).substring(2, 5),
+        inviteeName: name,
+        inviteeEmail: email,
+        inviteePhone: phone,
+        inviteeNotes: notes,
+        dateTime: dateTimeIso,
+        status: 'upcoming'
+      };
+
+      state.scheduledMeetings.unshift(newMeeting);
+      saveState();
+
+      document.getElementById('pub-step-form').style.display = 'none';
+      document.getElementById('pub-step-success').style.display = 'flex';
+
+      const hostName = getHostName();
+      document.getElementById('pub-success-email').textContent = email;
+      document.getElementById('pub-success-title').textContent = state.bookingEvent.name;
+      document.getElementById('pub-success-host').textContent = hostName;
+      document.getElementById('pub-success-datetime').textContent = document.getElementById('pub-selected-datetime-text').textContent;
+      document.getElementById('pub-success-location').textContent = `${state.bookingEvent.location} (${newMeeting.locationUrl})`;
+
+      const startObj = new Date(dateTimeIso);
+      const endObj = new Date(startObj.getTime() + state.bookingEvent.duration * 60000);
+      const pad = (n) => String(n).padStart(2, '0');
+      const gDate = (dt) => `${dt.getUTCFullYear()}${pad(dt.getUTCMonth() + 1)}${pad(dt.getUTCDate())}T${pad(dt.getUTCHours())}${pad(dt.getUTCMinutes())}00Z`;
+
+      const gCalUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(newMeeting.eventTitle + ' con ' + hostName)}&dates=${gDate(startObj)}/${gDate(endObj)}&details=${encodeURIComponent(newMeeting.inviteeNotes || 'Reunión programada')}&location=${encodeURIComponent(newMeeting.locationUrl || newMeeting.location)}`;
+      const outCalUrl = `https://outlook.live.com/calendar/0/deeplink/compose?path=/calendar/action/compose&rru=addevent&subject=${encodeURIComponent(newMeeting.eventTitle + ' con ' + hostName)}&startdt=${startObj.toISOString()}&enddt=${endObj.toISOString()}&body=${encodeURIComponent(newMeeting.inviteeNotes || 'Reunión programada')}&location=${encodeURIComponent(newMeeting.locationUrl || newMeeting.location)}`;
+
+      const btnG = document.getElementById('pub-btn-add-gcal');
+      const btnO = document.getElementById('pub-btn-add-outlook');
+      if (btnG) btnG.href = gCalUrl;
+      if (btnO) btnO.href = outCalUrl;
+
+      const btnIcs = document.getElementById('pub-btn-download-ics');
+      if (btnIcs) btnIcs.onclick = () => downloadIcsFile(newMeeting);
+
+      renderScheduledMeetings();
+      syncMeetingsToServer();
+      showToast('¡Reunión confirmada en el calendario!', '🎉');
+    });
+  }
+
+  // Public Landing Button in Header & Login Topbar
   document.getElementById('btn-public-landing-view').addEventListener('click', (e) => {
     e.preventDefault();
     goToPublicLanding();
   });
+
+  const authPublicBtn = document.getElementById('btn-auth-view-public');
+  if (authPublicBtn) {
+    authPublicBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      goToPublicLanding();
+    });
+  }
 
   // Return to Admin Button in Public View
   const returnAdminBtn = document.getElementById('btn-return-to-admin');
@@ -1682,13 +2116,18 @@
 
   async function fetchCalendarStatus() {
     try {
-      const res = await fetch('/api/calendar/status');
+      const res = await fetch('/api/calendar/status', {
+        method: 'GET',
+        credentials: 'same-origin',
+        cache: 'no-store'
+      });
       if (!res.ok) return;
       const data = await res.json();
       if (data.success) {
         state.googleCalendar = {
           connected: !!data.connected,
-          calendarName: data.calendarName,
+          calendarName: data.calendarName || null,
+          hostPublicName: data.hostPublicName || null,
           lastSync: data.lastSync,
           autoBlock: data.autoBlock !== false,
           eventCount: data.eventCount || 0,
@@ -2060,7 +2499,7 @@
   }
 
   // =========================================================================
-  // URL Hash & Deep Link Routing
+  // URL Hash & Deep Link Routing (with Strict Per-Browser Auth Guard)
   // =========================================================================
   function handleRouting() {
     const hash = window.location.hash || '';
@@ -2069,9 +2508,8 @@
 
     // Query params feedback
     if (urlParams.get('login') === 'success') {
-      showToast('¡Bienvenido! Has iniciado sesión con Google con éxito.', '🎉');
-      history.replaceState(null, '', window.location.pathname + (window.location.hash || ''));
-      checkAuthStatus();
+      showToast('¡Bienvenido! Has iniciado sesión con Google en este navegador.', '🎉');
+      history.replaceState(null, '', window.location.pathname + (window.location.hash || '#meeting_types'));
     }
 
     if (urlParams.get('error')) {
@@ -2086,37 +2524,47 @@
       history.replaceState(null, '', window.location.pathname + (window.location.hash || ''));
     }
 
-    // 1. Explicit Login Route
+    // 1. Public Direct Event Booking Link (#/book/:slug or /book/:slug)
+    if (hash.startsWith('#/book/') || path.startsWith('/book/')) {
+      const rawSlug = hash.startsWith('#/book/') ? hash.replace('#/book/', '') : path.replace('/book/', '');
+      const cleanSlug = rawSlug.split('?')[0];
+      document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
+      switchView('public-landing');
+      openPublicEventBooking(cleanSlug);
+      return;
+    }
+
+    // 2. Public Host Profile Directory (#public, #/user/:slug, /public, /user/:slug)
+    if (hash === '#public' || hash.startsWith('#/user') || path === '/public' || path.startsWith('/user/')) {
+      document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
+      showPublicDirectoryMode();
+      switchView('public-landing');
+      return;
+    }
+
+    // 3. Explicit Login Route
     if (hash === '#login' || path === '/login') {
+      document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
+      if (state.auth.authenticated) {
+        window.location.hash = '#meeting_types';
+        switchView('event-types');
+      } else {
+        switchView('login');
+      }
+      return;
+    }
+
+    // 4. Protected Admin Routes (/ or /app/... or #meeting_types)
+    // STRICT GUARD: If this browser is NOT authenticated, always show Login!
+    if (!state.auth.authenticated) {
       document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
       switchView('login');
       return;
     }
 
-    // 2. Calendly Meeting Types route (/app/scheduling/meeting_types/user/me)
-    if (path.startsWith('/app/scheduling') || hash === '#meeting_types' || hash === '#app') {
-      document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
-      switchView('event-types');
-      return;
-    }
-
-    // 3. Public profile or booking link
-    if (hash === '#public' || hash.startsWith('#/user') || path === '/public' || path.startsWith('/user/')) {
-      document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
-      switchView('public-landing');
-      return;
-    }
-
-    // 4. Booking direct modal
-    if (hash.startsWith('#/book/') || path.startsWith('/book/')) {
-      const slug = hash.startsWith('#/book/') ? hash.replace('#/book/', '') : path.replace('/book/', '');
-      const ev = state.eventTypes.find(e => e.slug === slug || e.id === slug);
-      if (ev) {
-        document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
-        openBookingModal(ev.id);
-        return;
-      }
-    }
+    // Authenticated browser -> show Admin Dashboard
+    document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
+    switchView('event-types');
   }
 
   window.addEventListener('hashchange', handleRouting);
@@ -2124,6 +2572,11 @@
   // Expose public API for inline handlers
   window.ReunionesApp = {
     openBookingModal,
+    openPublicEventBooking,
+    selectPublicBookingDate,
+    choosePublicSlot,
+    proceedToPublicBookingForm,
+    showPublicDirectoryMode,
     openCreateModal,
     openEditModal,
     openShareModal,
@@ -2147,21 +2600,34 @@
     initiateGoogleLogin,
     loginDemoUser,
     logoutUser,
-    checkAuthStatus
+    checkAuthStatus,
+    showToast
   };
 
-  // --- Initial Mount ---
-  loadState();
-  checkAuthStatus();
-  updateHostProfileUI();
-  renderEventTypes();
-  renderScheduledMeetings();
-  renderWeeklySchedule();
-  fetchCalendarStatus();
-  syncMeetingsToServer();
-  handleRouting();
+  // --- Initial Mount (Strict Per-Browser Auth First) ---
+  async function initApp() {
+    loadState();
+    renderEventTypes();
+    renderScheduledMeetings();
+    renderWeeklySchedule();
+    syncMeetingsToServer();
 
-  console.log('✨ Reuniones (Calendly Clone) con Login de Google activo y listo.');
+    // If on a public route, render public page immediately while checking auth in parallel
+    if (isPublicRoute()) {
+      handleRouting();
+    } else {
+      // Default to Login view until per-browser session cookie is verified
+      switchView('login');
+    }
+
+    await checkAuthStatus();
+    await fetchCalendarStatus();
+    handleRouting();
+  }
+
+  initApp();
+
+  console.log('✨ Reuniones (Calendly Clone) con Login aislado por navegador y Página Pública estilo Calendly original listo.');
 })();
 
 

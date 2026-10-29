@@ -18,26 +18,60 @@ import {
   GOOGLE_USERINFO_ENDPOINT
 } from '../../lib/server-utils.js';
 
-function jsonResponse(data, status = 200, headers = {}) {
+const NO_CACHE_HEADERS = {
+  'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, private, max-age=0, s-maxage=0',
+  'Pragma': 'no-cache',
+  'Expires': '0',
+  'Vary': 'Cookie'
+};
+
+function buildAuthCookies(sessionToken, isHttps) {
+  const secureFlag = isHttps ? '; Secure' : '';
+  if (sessionToken) {
+    return [
+      `reuniones_session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000${secureFlag}`,
+      `CALENDLY_AUTHENTICATED_USER_STATUS=true; Path=/; SameSite=Lax; Max-Age=2592000${secureFlag}`
+    ];
+  }
+  return [
+    `reuniones_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureFlag}`,
+    `CALENDLY_AUTHENTICATED_USER_STATUS=false; Path=/; SameSite=Lax; Max-Age=2592000${secureFlag}`
+  ];
+}
+
+function createHeaders(baseHeaders = {}, cookies = []) {
+  const h = new Headers({
+    ...NO_CACHE_HEADERS,
+    ...baseHeaders
+  });
+  for (const cookie of cookies) {
+    h.append('Set-Cookie', cookie);
+  }
+  return h;
+}
+
+function jsonResponse(data, status = 200, headers = {}, cookies = []) {
+  const h = createHeaders({
+    'Content-Type': 'application/json; charset=utf-8',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    ...headers
+  }, cookies);
   return new Response(JSON.stringify(data), {
     status,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      ...headers
-    }
+    headers: h
   });
 }
 
-function redirectResponse(location, headers = {}) {
+function redirectResponse(location, headers = {}, cookies = []) {
+  const h = createHeaders({
+    Location: location,
+    ...headers
+  }, cookies);
   return new Response(null, {
     status: 302,
-    headers: {
-      Location: location,
-      ...headers
-    }
+    headers: h
   });
 }
 
@@ -72,12 +106,14 @@ export const ALL = async (context) => {
   if (pathname === '/api/auth/me' && method === 'GET') {
     const user = getSessionUser(request);
     const configured = isGoogleConfigured();
+    const isHttps = url.protocol === 'https:';
+    const statusCookie = `CALENDLY_AUTHENTICATED_USER_STATUS=${user ? 'true' : 'false'}; Path=/; SameSite=Lax; Max-Age=2592000${isHttps ? '; Secure' : ''}`;
     return jsonResponse({
       authenticated: !!user,
       user: user || null,
       googleConfigured: configured,
       googleClientId: configured ? getEnv('GOOGLE_CLIENT_ID') : null
-    });
+    }, 200, {}, [statusCookie]);
   }
 
   // --- Auth: Initiate Google OAuth ---
@@ -175,17 +211,16 @@ export const ALL = async (context) => {
       });
 
       if (user.hasCalendarScope) {
-        const syncConfig = loadSyncConfig();
+        const syncConfig = loadSyncConfig(user.id);
         syncConfig.connected = true;
         syncConfig.calendarName = `${user.name} (${user.email})`;
+        syncConfig.hostPublicName = user.name;
         syncConfig.lastSync = new Date().toISOString();
-        saveSyncConfig(syncConfig);
+        saveSyncConfig(syncConfig, user.id);
       }
 
       const isHttps = url.protocol === 'https:';
-      return redirectResponse('/?login=success#meeting_types', {
-        'Set-Cookie': `reuniones_session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000${isHttps ? '; Secure' : ''}`
-      });
+      return redirectResponse('/?login=success#meeting_types', {}, buildAuthCookies(sessionToken, isHttps));
     } catch (err) {
       console.error('Fatal Google callback error:', err);
       return redirectResponse(`/#login?error=server_error&details=${encodeURIComponent(err.message)}`);
@@ -218,24 +253,23 @@ export const ALL = async (context) => {
       expiresAt: new Date(Date.now() + 86400000 * 30).toISOString()
     });
 
-    const syncConfig = loadSyncConfig();
+    const syncConfig = loadSyncConfig(user.id);
     syncConfig.connected = true;
     syncConfig.calendarName = `${user.name} (Google Calendar Demo)`;
+    syncConfig.hostPublicName = user.name;
     syncConfig.lastSync = new Date().toISOString();
     syncConfig.isDemo = true;
     if (!syncConfig.events || syncConfig.events.length === 0) {
       syncConfig.events = generateDemoEvents();
     }
-    saveSyncConfig(syncConfig);
+    saveSyncConfig(syncConfig, user.id);
 
     const isHttps = url.protocol === 'https:';
     return jsonResponse({
       success: true,
       message: 'Sesión iniciada con éxito (Cuenta Google Demo)',
       user
-    }, 200, {
-      'Set-Cookie': `reuniones_session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000${isHttps ? '; Secure' : ''}`
-    });
+    }, 200, {}, buildAuthCookies(sessionToken, isHttps));
   }
 
   // --- Auth: One Tap ---
@@ -271,9 +305,7 @@ export const ALL = async (context) => {
       });
 
       const isHttps = url.protocol === 'https:';
-      return jsonResponse({ success: true, user }, 200, {
-        'Set-Cookie': `reuniones_session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000${isHttps ? '; Secure' : ''}`
-      });
+      return jsonResponse({ success: true, user }, 200, {}, buildAuthCookies(sessionToken, isHttps));
     } catch {
       return jsonResponse({ success: false, error: 'Token Google inválido' }, 400);
     }
@@ -281,18 +313,40 @@ export const ALL = async (context) => {
 
   // --- Auth: Logout ---
   if (pathname === '/api/auth/logout' && method === 'POST') {
-    return jsonResponse({ success: true, message: 'Sesión cerrada correctamente' }, 200, {
-      'Set-Cookie': 'reuniones_session=; Path=/; HttpOnly; Max-Age=0'
-    });
+    const isHttps = url.protocol === 'https:';
+    return jsonResponse({ success: true, message: 'Sesión cerrada correctamente' }, 200, {}, buildAuthCookies(null, isHttps));
   }
 
   // --- Calendar: Status ---
   if (pathname === '/api/calendar/status' && method === 'GET') {
-    const config = loadSyncConfig();
+    const user = getSessionUser(request);
+    const config = loadSyncConfig(user?.id || null);
+
+    // If unauthenticated browser, never expose another user's private calendarName/email
+    if (!user) {
+      const publicBusyEvents = (config.events || []).slice(0, 100).map(ev => ({
+        start: ev.start,
+        end: ev.end,
+        status: ev.status || 'CONFIRMED'
+      }));
+      return jsonResponse({
+        success: true,
+        connected: !!config.connected,
+        calendarName: null,
+        hostPublicName: config.hostPublicName || null,
+        lastSync: config.lastSync || null,
+        autoBlock: config.autoBlock !== false,
+        eventCount: publicBusyEvents.length,
+        events: publicBusyEvents,
+        isDemo: false
+      });
+    }
+
     return jsonResponse({
       success: true,
-      connected: config.connected,
+      connected: !!config.connected,
       calendarName: config.calendarName,
+      hostPublicName: config.hostPublicName || user.name,
       lastSync: config.lastSync,
       autoBlock: config.autoBlock !== false,
       eventCount: (config.events || []).length,
