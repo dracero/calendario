@@ -826,7 +826,7 @@
 
           <div class="card-footer">
             <div class="card-footer-left">
-              <button class="btn-copy-link" onclick="window.ReunionesApp.copyEventLink('${publicUrl}', this)">
+              <button class="btn-copy-link" onclick="window.ReunionesApp.copyEventLink('${ev.slug}', this)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                 Copiar enlace
               </button>
@@ -1242,6 +1242,20 @@
     document.getElementById('form-summary-datetime').textContent = `📅 ${dateFormatted} a las ${timeStr} (${state.bookingEvent.duration} min)`;
   }
 
+  function buildLocalDateTimeWithOffset(dateObj, timeStr) {
+    const y = dateObj.getFullYear();
+    const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const d = String(dateObj.getDate()).padStart(2, '0');
+    const [hh = '09', mm = '00'] = String(timeStr || '09:00').split(':');
+    const exactLocal = new Date(y, dateObj.getMonth(), dateObj.getDate(), Number(hh), Number(mm), 0);
+    const tzOffsetMin = -exactLocal.getTimezoneOffset();
+    const sign = tzOffsetMin >= 0 ? '+' : '-';
+    const absMin = Math.abs(tzOffsetMin);
+    const offH = String(Math.floor(absMin / 60)).padStart(2, '0');
+    const offM = String(absMin % 60).padStart(2, '0');
+    return `${y}-${m}-${d}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00${sign}${offH}:${offM}`;
+  }
+
   async function submitBookingToServer(newMeeting) {
     const ctx = getPublicRouteContext();
     const pubHostName = getPublicHostName();
@@ -1287,17 +1301,22 @@
 
         // Also update the in-app calendar state if logged in
         if (state.auth && state.auth.authenticated) {
+          state.googleCalendar.connected = true;
+          if (!state.googleCalendar.calendarName && state.auth.user) {
+            state.googleCalendar.calendarName = `${state.auth.user.name} (${state.auth.user.email})`;
+          }
           state.googleCalendar.events = Array.isArray(state.googleCalendar.events)
             ? [calEv, ...state.googleCalendar.events.filter(ev => ev.id !== calEv.id)]
             : [calEv];
           state.googleCalendar.eventCount = state.googleCalendar.events.length;
-          if (state.googleCalendar.connected) {
-            saveUserLocalCalendarMeta({
-              userKey: getCurrentUserStorageKey(),
-              ...state.googleCalendar
-            });
-          }
+          state.googleCalendar.lastSync = new Date().toISOString();
+          saveUserLocalCalendarMeta({
+            userKey: getCurrentUserStorageKey(),
+            ...state.googleCalendar
+          });
           updateGoogleCalendarUI();
+          // Refresh live status from server & Google Calendar API in background
+          fetchCalendarStatus();
         }
         return data;
       }
@@ -1321,7 +1340,7 @@
       const y = state.selectedDate.getFullYear();
       const m = String(state.selectedDate.getMonth() + 1).padStart(2, '0');
       const d = String(state.selectedDate.getDate()).padStart(2, '0');
-      const dateTimeIso = `${y}-${m}-${d}T${state.selectedSlot}:00`;
+      const dateTimeIso = buildLocalDateTimeWithOffset(state.selectedDate, state.selectedSlot);
       const resolvedTz = (Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions().timeZone) || 'America/Santiago';
 
       const newMeeting = {
@@ -1713,9 +1732,12 @@
     if (menu) menu.classList.toggle('show');
   }
 
-  // Copy Event Link from Card Button
-  function copyEventLink(url, btnEl) {
-    copyToClipboard(url);
+  // Copy Event Link from Card Button (always generates fresh URL with current host & ht token)
+  function copyEventLink(slugOrUrl, btnEl) {
+    const targetUrl = (slugOrUrl && !String(slugOrUrl).startsWith('http'))
+      ? buildPublicBookUrl(slugOrUrl)
+      : slugOrUrl;
+    copyToClipboard(targetUrl);
     if (btnEl) {
       const origHtml = btnEl.innerHTML;
       btnEl.innerHTML = `✓ ¡Copiado!`;
@@ -1992,9 +2014,12 @@
 
     // Preserve host and ht query parameters in the hash when opening a specific event
     const ctx = getPublicRouteContext();
+    const effectiveHostSlug = ctx.hostSlug || getHostSlug(getPublicHostName());
+    const mySlug = state.auth && state.auth.authenticated && state.auth.user ? getHostSlug(state.auth.user.name) : '';
+    const effectiveHostToken = ctx.hostToken || ((!ctx.hostSlug || ctx.hostSlug === mySlug) ? (state.auth?.publicHostToken || '') : '');
     const params = new URLSearchParams();
-    if (ctx.hostSlug) params.set('host', ctx.hostSlug);
-    if (ctx.hostToken) params.set('ht', ctx.hostToken);
+    if (effectiveHostSlug) params.set('host', effectiveHostSlug);
+    if (effectiveHostToken) params.set('ht', effectiveHostToken);
     const qs = params.toString();
     const targetHash = `#/book/${ev.slug}${qs ? '?' + qs : ''}`;
     if (window.location.hash !== targetHash) {
@@ -2307,7 +2332,7 @@
         const y = state.selectedDate.getFullYear();
         const m = String(state.selectedDate.getMonth() + 1).padStart(2, '0');
         const d = String(state.selectedDate.getDate()).padStart(2, '0');
-        const dateTimeIso = `${y}-${m}-${d}T${state.selectedSlot}:00`;
+        const dateTimeIso = buildLocalDateTimeWithOffset(state.selectedDate, state.selectedSlot);
         const resolvedTz = (Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions().timeZone) || 'America/Santiago';
 
         const newMeeting = {
@@ -2507,14 +2532,19 @@
         }
         // Merge any meetings booked via public page on the server into state.scheduledMeetings
         if (Array.isArray(data.scheduledMeetings) && data.scheduledMeetings.length > 0) {
-          let addedAny = false;
+          let changedAny = false;
           data.scheduledMeetings.forEach(srvMeet => {
-            if (srvMeet && srvMeet.id && !state.scheduledMeetings.some(localMeet => localMeet.id === srvMeet.id)) {
+            if (!srvMeet || !srvMeet.id) return;
+            const existingIdx = state.scheduledMeetings.findIndex(localMeet => localMeet.id === srvMeet.id);
+            if (existingIdx === -1) {
               state.scheduledMeetings.unshift(srvMeet);
-              addedAny = true;
+              changedAny = true;
+            } else if (srvMeet.googleEventCreated && !state.scheduledMeetings[existingIdx].googleEventCreated) {
+              state.scheduledMeetings[existingIdx] = { ...state.scheduledMeetings[existingIdx], ...srvMeet };
+              changedAny = true;
             }
           });
-          if (addedAny) {
+          if (changedAny) {
             saveState();
             renderScheduledMeetings();
           }
@@ -2554,6 +2584,7 @@
             });
           }
         }
+        renderEventTypes();
         updateGoogleCalendarUI();
       }
     } catch (e) {
@@ -2663,6 +2694,9 @@
       }
 
       const syncMode = useGoogleOAuth ? 'google_oauth' : (isDemo ? 'demo' : 'ical');
+      if (data.publicHostToken) {
+        state.auth.publicHostToken = data.publicHostToken;
+      }
       state.googleCalendar = {
         connected: true,
         calendarName: data.calendarName,
@@ -2679,6 +2713,7 @@
         userKey: getCurrentUserStorageKey(),
         ...state.googleCalendar
       });
+      renderEventTypes();
       updateGoogleCalendarUI();
       showToast(`¡Conectado exitosamente con ${data.calendarName}!`, '🎉');
       if (state.selectedDate) {
@@ -3113,8 +3148,8 @@
       return;
     }
 
-    // 3. Explicit Login Route
-    if (hash === '#login' || path === '/login') {
+    // 3. Explicit Login Route (/login, /app/login, #login)
+    if (hash === '#login' || path === '/login' || path === '/app/login' || path === '/app/signup') {
       document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
       if (state.auth.authenticated) {
         window.location.hash = '#meeting_types';
@@ -3125,7 +3160,7 @@
       return;
     }
 
-    // 4. Protected Admin Routes (/ or /app/... or #meeting_types)
+    // 4. Protected Admin Routes (/ or /app/scheduling/callie/user/me or /app/scheduling/meeting_types/user/me or #meeting_types)
     // STRICT GUARD: If this browser is NOT authenticated, always show Login!
     if (!state.auth.authenticated) {
       document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
@@ -3133,9 +3168,15 @@
       return;
     }
 
-    // Authenticated browser -> show Admin Dashboard
+    // Authenticated browser -> show requested Admin Dashboard view
     document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
-    switchView('event-types');
+    if (hash === '#scheduled-events' || path.includes('/scheduled_events')) {
+      switchView('scheduled-events');
+    } else if (hash === '#availability' || path.includes('/availability')) {
+      switchView('availability');
+    } else {
+      switchView('event-types');
+    }
   }
 
   window.addEventListener('hashchange', handleRouting);
@@ -3181,7 +3222,6 @@
     renderEventTypes();
     renderScheduledMeetings();
     renderWeeklySchedule();
-    syncMeetingsToServer();
 
     // If on a public route, render public page immediately while checking auth in parallel
     if (isPublicRoute()) {
@@ -3193,6 +3233,11 @@
 
     await checkAuthStatus();
     await fetchCalendarStatus();
+    if (state.auth.authenticated) {
+      await syncMeetingsToServer();
+    }
+    renderEventTypes();
+    renderScheduledMeetings();
     handleRouting();
   }
 

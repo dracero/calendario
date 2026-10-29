@@ -15,10 +15,12 @@ import {
   loadMeetings,
   saveMeetings,
   mergeMeetingsIntoEvents,
+  normalizeDateTimeWithOffset,
   parseIcal,
   generateDemoEvents,
   fetchGoogleCalendarApiEvents,
   createGoogleCalendarEvent,
+  syncPendingMeetingsToGoogleCalendar,
   generateIcsFeed,
   GOOGLE_AUTH_ENDPOINT,
   GOOGLE_TOKEN_ENDPOINT,
@@ -120,7 +122,11 @@ export const ALL = async (context) => {
     let publicHostToken = null;
     if (user) {
       const cfg = loadSyncConfig(user);
-      if (sessionData?.accessToken && !user.isDemo && !cfg.googleAccessToken) {
+      if (sessionData?.accessToken && !user.isDemo && !cfg.explicitlyDisconnected) {
+        cfg.connected = true;
+        cfg.syncMode = cfg.syncMode || 'google_oauth';
+        cfg.isDemo = false;
+        cfg.calendarName = cfg.calendarName || `${user.name} (${user.email})`;
         cfg.googleAccessToken = sessionData.accessToken;
         cfg.googleRefreshToken = sessionData.refreshToken || cfg.googleRefreshToken || null;
         cfg.hostPublicName = user.name;
@@ -134,7 +140,7 @@ export const ALL = async (context) => {
         email: user.email,
         slug: slugifyName(user.name),
         connected: !!cfg.connected,
-        syncMode: cfg.syncMode || null,
+        syncMode: cfg.syncMode || (sessionData?.accessToken && !user.isDemo ? 'google_oauth' : null),
         icalUrl: cfg.icalUrl || '',
         googleAccessToken: sessionData?.accessToken || cfg.googleAccessToken || null,
         googleRefreshToken: sessionData?.refreshToken || cfg.googleRefreshToken || null
@@ -168,7 +174,14 @@ export const ALL = async (context) => {
     const clientId = getEnv('GOOGLE_CLIENT_ID');
     const redirectUri = getRedirectUri(request);
     const rawScopes = getEnv('GOOGLE_SCOPES') || 'openid email profile https://www.googleapis.com/auth/calendar.events';
-    const scopes = rawScopes.replace(/["']/g, '').trim().split(/\s+/).join(' ');
+    const scopeSet = new Set(
+      rawScopes.replace(/["',;]+/g, ' ').trim().split(/\s+/).filter(Boolean)
+    );
+    scopeSet.add('openid');
+    scopeSet.add('email');
+    scopeSet.add('profile');
+    scopeSet.add('https://www.googleapis.com/auth/calendar.events');
+    const scopes = Array.from(scopeSet).join(' ');
     const state = crypto.randomBytes(16).toString('hex');
     const loginHint = (url.searchParams.get('login_hint') || '').trim();
     const hintParam = loginHint ? `&login_hint=${encodeURIComponent(loginHint)}` : '';
@@ -248,8 +261,13 @@ export const ALL = async (context) => {
         expiresAt: new Date(Date.now() + 86400000 * 30).toISOString()
       });
 
-      // Persist this user's host identity and Google OAuth tokens for public page bookings
+      // Automatically connect Google Calendar on Google OAuth login (Calendly intro_flow_calendar_connection)
       const syncConfig = loadSyncConfig(user);
+      syncConfig.connected = true;
+      syncConfig.syncMode = 'google_oauth';
+      syncConfig.isDemo = false;
+      syncConfig.explicitlyDisconnected = false;
+      syncConfig.calendarName = `${user.name} (${user.email})`;
       syncConfig.hostPublicName = user.name;
       syncConfig.hostEmail = user.email;
       syncConfig.hostSlug = slugifyName(user.name);
@@ -257,11 +275,14 @@ export const ALL = async (context) => {
       if (tokenData.refresh_token) {
         syncConfig.googleRefreshToken = tokenData.refresh_token;
       }
-      if (syncConfig.connected && syncConfig.syncMode === 'google_oauth' && tokenData.access_token) {
+      if (tokenData.access_token) {
         const apiResult = await fetchGoogleCalendarApiEvents(tokenData.access_token, tokenData.refresh_token);
         if (apiResult.ok) {
           syncConfig.events = apiResult.events;
           syncConfig.lastSync = new Date().toISOString();
+          if (Array.isArray(apiResult.reunionesMeetings) && apiResult.reunionesMeetings.length > 0) {
+            saveMeetings(apiResult.reunionesMeetings, user, syncConfig.hostSlug);
+          }
         }
       }
       saveSyncConfig(syncConfig, user);
@@ -424,6 +445,28 @@ export const ALL = async (context) => {
     if (isPublicLookup || requestedSlug || requestedHostToken || !user) {
       const { userKey: hostUserKey, config } = resolvePublicHostConfig(requestedSlug || null, requestedHostToken || null);
       const effectiveSlug = config.hostSlug || requestedSlug || null;
+
+      // If on a cold instance with host's Google OAuth token in ht, fetch live Google Calendar busy slots
+      if (
+        config.googleAccessToken &&
+        !String(config.googleAccessToken).startsWith('demo_token_') &&
+        (!Array.isArray(config.events) || config.events.length === 0)
+      ) {
+        const pubApiRes = await fetchGoogleCalendarApiEvents(config.googleAccessToken, config.googleRefreshToken);
+        if (pubApiRes.ok) {
+          config.connected = true;
+          config.events = pubApiRes.events;
+          config.lastSync = new Date().toISOString();
+          if (pubApiRes.newAccessToken) {
+            config.googleAccessToken = pubApiRes.newAccessToken;
+          }
+          if (Array.isArray(pubApiRes.reunionesMeetings) && pubApiRes.reunionesMeetings.length > 0) {
+            saveMeetings(pubApiRes.reunionesMeetings, hostUserKey, effectiveSlug);
+          }
+          saveSyncConfig(config, hostUserKey, effectiveSlug);
+        }
+      }
+
       const hostMeetings = loadMeetings(hostUserKey, effectiveSlug);
       const mergedHostEvents = mergeMeetingsIntoEvents(config.events || [], hostMeetings);
 
@@ -456,22 +499,71 @@ export const ALL = async (context) => {
 
     // Authenticated Admin Dashboard Lookup: Strictly THIS user's own config
     const config = loadSyncConfig(user);
-    if (sessionData?.accessToken && !user.isDemo && !config.googleAccessToken) {
-      config.googleAccessToken = sessionData.accessToken;
-      config.googleRefreshToken = sessionData.refreshToken || config.googleRefreshToken || null;
-      config.hostPublicName = user.name;
-      config.hostEmail = user.email;
-      config.hostSlug = slugifyName(user.name);
-      saveSyncConfig(config, user);
-    }
-
+    const updatedCookies = [];
     const cleanAuthHostName = (config.hostPublicName || user.name || '')
       .replace(/calendly/gi, 'Reuniones')
       .trim();
     const authHostSlug = config.hostSlug || slugifyName(cleanAuthHostName || user.name);
-    const userMeetings = loadMeetings(user, authHostSlug);
 
-    const isConnected = !!config.connected;
+    // Auto-connect Google Calendar for Google OAuth users (Calendly intro_flow_calendar_connection)
+    if (sessionData?.accessToken && !user.isDemo && !config.explicitlyDisconnected) {
+      config.connected = true;
+      config.syncMode = config.syncMode || 'google_oauth';
+      config.isDemo = false;
+      config.calendarName = config.calendarName || `${user.name} (${user.email})`;
+      config.googleAccessToken = sessionData.accessToken;
+      config.googleRefreshToken = sessionData.refreshToken || config.googleRefreshToken || null;
+      config.hostPublicName = cleanAuthHostName || user.name;
+      config.hostEmail = user.email;
+      config.hostSlug = authHostSlug;
+    }
+
+    let userMeetings = loadMeetings(user, authHostSlug);
+
+    // Refresh live events from Google Calendar API so events booked on any serverless instance appear immediately
+    const effectiveAccessToken = sessionData?.accessToken || config.googleAccessToken || null;
+    const effectiveRefreshToken = sessionData?.refreshToken || config.googleRefreshToken || null;
+    if (
+      config.connected &&
+      config.syncMode === 'google_oauth' &&
+      effectiveAccessToken &&
+      !String(effectiveAccessToken).startsWith('demo_token_')
+    ) {
+      const apiResult = await fetchGoogleCalendarApiEvents(effectiveAccessToken, effectiveRefreshToken);
+      if (apiResult.newAccessToken) {
+        config.googleAccessToken = apiResult.newAccessToken;
+        if (sessionData) {
+          const newSessionToken = signSession({
+            ...sessionData,
+            accessToken: apiResult.newAccessToken,
+            tokenExpiresAt: new Date(Date.now() + 3600 * 1000).toISOString()
+          });
+          updatedCookies.push(...buildAuthCookies(newSessionToken, url.protocol === 'https:'));
+        }
+      }
+      if (apiResult.ok) {
+        config.events = apiResult.events;
+        config.lastSync = new Date().toISOString();
+        if (Array.isArray(apiResult.reunionesMeetings) && apiResult.reunionesMeetings.length > 0) {
+          saveMeetings(apiResult.reunionesMeetings, user, authHostSlug);
+          userMeetings = loadMeetings(user, authHostSlug);
+        }
+      }
+      const pendingSync = await syncPendingMeetingsToGoogleCalendar(
+        config.googleAccessToken || effectiveAccessToken,
+        effectiveRefreshToken,
+        userMeetings,
+        config.events || [],
+        user
+      );
+      if (pendingSync.updated) {
+        saveMeetings(pendingSync.meetings, user, authHostSlug);
+        userMeetings = loadMeetings(user, authHostSlug);
+      }
+      saveSyncConfig(config, user, authHostSlug);
+    }
+
+    const isConnected = !!(config.connected || userMeetings.some(m => m && m.id && !['meet-1', 'meet-2', 'meet-3'].includes(m.id)));
     const calendarName = isConnected ? (config.calendarName || `${user.name} (${user.email})`) : null;
     const baseEvents = isConnected && Array.isArray(config.events) ? config.events : [];
     const events = isConnected ? mergeMeetingsIntoEvents(baseEvents, userMeetings) : [];
@@ -484,8 +576,8 @@ export const ALL = async (context) => {
       connected: isConnected,
       syncMode: config.syncMode || null,
       icalUrl: config.icalUrl || '',
-      googleAccessToken: sessionData?.accessToken || config.googleAccessToken || null,
-      googleRefreshToken: sessionData?.refreshToken || config.googleRefreshToken || null
+      googleAccessToken: config.googleAccessToken || effectiveAccessToken || null,
+      googleRefreshToken: effectiveRefreshToken || null
     });
 
     return jsonResponse({
@@ -503,7 +595,7 @@ export const ALL = async (context) => {
       events: events.slice(0, 100),
       scheduledMeetings: userMeetings,
       isDemo: !!(isConnected && config.isDemo)
-    });
+    }, 200, {}, updatedCookies);
   }
 
   // --- Calendar: Connect (Strictly Per Authenticated User) ---
@@ -529,9 +621,13 @@ export const ALL = async (context) => {
       const apiResult = await fetchGoogleCalendarApiEvents(sessionData.accessToken, sessionData.refreshToken);
       let events = [];
       let warning = null;
+      const userSlug = slugifyName(user.name);
 
       if (apiResult.ok) {
         events = apiResult.events;
+        if (Array.isArray(apiResult.reunionesMeetings) && apiResult.reunionesMeetings.length > 0) {
+          saveMeetings(apiResult.reunionesMeetings, user, userSlug);
+        }
       } else {
         warning = apiResult.error;
         if (user.email) {
@@ -549,48 +645,87 @@ export const ALL = async (context) => {
         }
       }
 
+      const userMeetings = loadMeetings(user, userSlug);
+      const mergedEvents = mergeMeetingsIntoEvents(events, userMeetings);
+
       const config = {
         connected: true,
+        explicitlyDisconnected: false,
         syncMode: 'google_oauth',
         calendarName: `${user.name} (${user.email})`,
         hostPublicName: user.name,
+        hostEmail: user.email,
+        hostSlug: userSlug,
+        googleAccessToken: apiResult.newAccessToken || sessionData.accessToken,
+        googleRefreshToken: sessionData.refreshToken || null,
         lastSync: new Date().toISOString(),
         autoBlock: autoBlock !== false,
         icalUrl: '',
         isDemo: false,
-        events
+        events: mergedEvents
       };
-      saveSyncConfig(config, user);
+      saveSyncConfig(config, user, userSlug);
+
+      const publicHostToken = encryptHostToken({
+        userKey: user.email || user.id,
+        name: user.name,
+        email: user.email,
+        slug: userSlug,
+        connected: true,
+        syncMode: 'google_oauth',
+        icalUrl: '',
+        googleAccessToken: config.googleAccessToken,
+        googleRefreshToken: config.googleRefreshToken
+      });
 
       return jsonResponse({
         success: true,
         syncMode: 'google_oauth',
+        publicHostToken,
         calendarName: config.calendarName,
         icalUrl: '',
-        count: events.length,
-        events: events.slice(0, 100),
+        count: mergedEvents.length,
+        events: mergedEvents.slice(0, 100),
+        scheduledMeetings: userMeetings,
         warning
       });
     }
 
     // Mode 2: Connect Demo Calendar for this user
     if (isDemo) {
-      const demoEvents = generateDemoEvents();
+      const userSlug = slugifyName(user.name);
+      const userMeetings = loadMeetings(user, userSlug);
+      const demoEvents = mergeMeetingsIntoEvents(generateDemoEvents(), userMeetings);
       const config = {
         connected: true,
+        explicitlyDisconnected: false,
         syncMode: 'demo',
         calendarName: `${user.name} (Google Calendar Demo)`,
         hostPublicName: user.name,
+        hostEmail: user.email,
+        hostSlug: userSlug,
         lastSync: new Date().toISOString(),
         autoBlock: autoBlock !== false,
         icalUrl: 'demo://calendar.google.com/calendar/u/0/r',
         isDemo: true,
         events: demoEvents
       };
-      saveSyncConfig(config, user);
+      saveSyncConfig(config, user, userSlug);
+      const publicHostToken = encryptHostToken({
+        userKey: user.email || user.id,
+        name: user.name,
+        email: user.email,
+        slug: userSlug,
+        connected: true,
+        syncMode: 'demo',
+        icalUrl: config.icalUrl,
+        googleAccessToken: null,
+        googleRefreshToken: null
+      });
       return jsonResponse({
         success: true,
         syncMode: 'demo',
+        publicHostToken,
         message: 'Google Calendar sincronizado en modo demostración para tu usuario',
         calendarName: config.calendarName,
         icalUrl: config.icalUrl,
@@ -622,26 +757,44 @@ export const ALL = async (context) => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const icalContent = await response.text();
       const { calendarName, events } = parseIcal(icalContent);
+      const userSlug = slugifyName(user.name);
+      const userMeetings = loadMeetings(user, userSlug);
+      const mergedEvents = mergeMeetingsIntoEvents(events, userMeetings);
 
       const config = {
         connected: true,
+        explicitlyDisconnected: false,
         syncMode: 'ical',
         calendarName: calendarName || `${user.name} (Google Calendar)`,
         hostPublicName: user.name,
+        hostEmail: user.email,
+        hostSlug: userSlug,
         lastSync: new Date().toISOString(),
         autoBlock: autoBlock !== false,
         icalUrl: fetchUrl,
         isDemo: false,
-        events: events
+        events: mergedEvents
       };
-      saveSyncConfig(config, user);
+      saveSyncConfig(config, user, userSlug);
+      const publicHostToken = encryptHostToken({
+        userKey: user.email || user.id,
+        name: user.name,
+        email: user.email,
+        slug: userSlug,
+        connected: true,
+        syncMode: 'ical',
+        icalUrl: fetchUrl,
+        googleAccessToken: sessionData?.accessToken || config.googleAccessToken || null,
+        googleRefreshToken: sessionData?.refreshToken || config.googleRefreshToken || null
+      });
       return jsonResponse({
         success: true,
         syncMode: 'ical',
+        publicHostToken,
         calendarName: config.calendarName,
         icalUrl: config.icalUrl,
-        count: events.length,
-        events: events.slice(0, 100)
+        count: mergedEvents.length,
+        events: mergedEvents.slice(0, 100)
       });
     } catch (err) {
       return jsonResponse({ success: false, error: `Error al leer el feed iCal: ${err.message}` }, 422);
@@ -661,17 +814,17 @@ export const ALL = async (context) => {
 
     const effectiveIcalUrl = (body.icalUrl || config.icalUrl || '').trim();
     const isDemoMode = !!(body.isDemo || config.isDemo || effectiveIcalUrl.startsWith('demo://'));
-    const isOAuthMode = !!(body.syncMode === 'google_oauth' || config.syncMode === 'google_oauth' || (config.connected && !effectiveIcalUrl && !isDemoMode && sessionData?.accessToken));
+    const isOAuthMode = !!(body.syncMode === 'google_oauth' || config.syncMode === 'google_oauth' || (!effectiveIcalUrl && !isDemoMode && (sessionData?.accessToken || config.googleAccessToken)));
     const isConnected = !!(config.connected || effectiveIcalUrl || isDemoMode || isOAuthMode);
 
     if (!isConnected) {
       return jsonResponse({ success: false, error: 'Este usuario no tiene ningún calendario conectado actualmente.' }, 400);
     }
 
-    // 1. Demo Mode Sync
     const userSlug = config.hostSlug || slugifyName(user.name);
-    const userMeetings = loadMeetings(user, userSlug);
+    let userMeetings = loadMeetings(user, userSlug);
 
+    // 1. Demo Mode Sync
     if (isDemoMode) {
       config.connected = true;
       config.syncMode = 'demo';
@@ -680,7 +833,7 @@ export const ALL = async (context) => {
       config.hostPublicName = user.name;
       config.lastSync = new Date().toISOString();
       config.events = mergeMeetingsIntoEvents(generateDemoEvents(), userMeetings);
-      saveSyncConfig(config, user);
+      saveSyncConfig(config, user, userSlug);
       return jsonResponse({
         success: true,
         source: 'demo',
@@ -712,7 +865,7 @@ export const ALL = async (context) => {
         config.hostPublicName = user.name;
         config.lastSync = new Date().toISOString();
         config.events = mergedEvents;
-        saveSyncConfig(config, user);
+        saveSyncConfig(config, user, userSlug);
         return jsonResponse({
           success: true,
           source: 'ical',
@@ -727,30 +880,57 @@ export const ALL = async (context) => {
     }
 
     // 3. Google OAuth API Sync (when this user connected via Google OAuth)
-    if (sessionData?.accessToken && !user.isDemo) {
-      const apiResult = await fetchGoogleCalendarApiEvents(sessionData.accessToken, sessionData.refreshToken);
+    const activeAccessToken = sessionData?.accessToken || config.googleAccessToken || null;
+    const activeRefreshToken = sessionData?.refreshToken || config.googleRefreshToken || null;
+    if (activeAccessToken && !user.isDemo) {
+      // First push any pending local meetings into Google Calendar
+      const pendingSync = await syncPendingMeetingsToGoogleCalendar(
+        activeAccessToken,
+        activeRefreshToken,
+        userMeetings,
+        config.events || [],
+        user
+      );
+      if (pendingSync.updated) {
+        saveMeetings(pendingSync.meetings, user, userSlug);
+        userMeetings = loadMeetings(user, userSlug);
+      }
+
+      const apiResult = await fetchGoogleCalendarApiEvents(
+        pendingSync.newAccessToken || activeAccessToken,
+        activeRefreshToken
+      );
 
       const updatedCookies = [];
-      if (apiResult.newAccessToken) {
-        const newSessionToken = signSession({
-          ...sessionData,
-          accessToken: apiResult.newAccessToken,
-          tokenExpiresAt: new Date(Date.now() + 3600 * 1000).toISOString()
-        });
-        const isHttps = url.protocol === 'https:';
-        updatedCookies.push(...buildAuthCookies(newSessionToken, isHttps));
+      const refreshedToken = apiResult.newAccessToken || pendingSync.newAccessToken;
+      if (refreshedToken) {
+        config.googleAccessToken = refreshedToken;
+        if (sessionData) {
+          const newSessionToken = signSession({
+            ...sessionData,
+            accessToken: refreshedToken,
+            tokenExpiresAt: new Date(Date.now() + 3600 * 1000).toISOString()
+          });
+          const isHttps = url.protocol === 'https:';
+          updatedCookies.push(...buildAuthCookies(newSessionToken, isHttps));
+        }
       }
 
       if (apiResult.ok) {
+        if (Array.isArray(apiResult.reunionesMeetings) && apiResult.reunionesMeetings.length > 0) {
+          saveMeetings(apiResult.reunionesMeetings, user, userSlug);
+          userMeetings = loadMeetings(user, userSlug);
+        }
         const mergedEvents = mergeMeetingsIntoEvents(apiResult.events, userMeetings);
         config.connected = true;
+        config.explicitlyDisconnected = false;
         config.syncMode = 'google_oauth';
         config.isDemo = false;
         config.calendarName = config.calendarName || `${user.name} (${user.email})`;
         config.hostPublicName = user.name;
         config.lastSync = new Date().toISOString();
         config.events = mergedEvents;
-        saveSyncConfig(config, user);
+        saveSyncConfig(config, user, userSlug);
 
         return jsonResponse({
           success: true,
@@ -780,7 +960,7 @@ export const ALL = async (context) => {
             config.hostPublicName = user.name;
             config.lastSync = new Date().toISOString();
             config.events = mergedEvents;
-            saveSyncConfig(config, user);
+            saveSyncConfig(config, user, userSlug);
 
             return jsonResponse({
               success: true,
@@ -805,7 +985,7 @@ export const ALL = async (context) => {
       config.hostPublicName = user.name;
       config.lastSync = new Date().toISOString();
       config.events = fallbackEvents;
-      saveSyncConfig(config, user);
+      saveSyncConfig(config, user, userSlug);
 
       return jsonResponse({
         success: true,
@@ -830,6 +1010,7 @@ export const ALL = async (context) => {
     if (user) {
       const config = {
         connected: false,
+        explicitlyDisconnected: true,
         syncMode: null,
         calendarName: null,
         hostPublicName: user.name,
@@ -858,6 +1039,10 @@ export const ALL = async (context) => {
       return jsonResponse({ success: false, error: 'Datos de la reunión incompletos.' }, 400);
     }
 
+    const meetingTimeZone = rawMeeting.timeZone || 'America/Santiago';
+    rawMeeting.timeZone = meetingTimeZone;
+    rawMeeting.dateTime = normalizeDateTimeWithOffset(rawMeeting.dateTime, meetingTimeZone);
+
     const { userKey: resolvedHostKey, config: hostConfig } = resolvePublicHostConfig(hostSlug || null, hostToken || null);
     const effectiveHostKey = resolvedHostKey || (visitorUser ? (visitorUser.email || visitorUser.id) : 'public-host');
     const effectiveHostName = (hostConfig.hostPublicName || body.hostName || (visitorUser && visitorUser.name) || 'Anfitrión')
@@ -866,9 +1051,11 @@ export const ALL = async (context) => {
     const effectiveHostEmail = hostConfig.hostEmail || null;
 
     let googleEventCreated = false;
+    let googleEventId = null;
     let googleEventHtmlLink = null;
     let googleHangoutLink = null;
     let googleCalendarError = null;
+    const updatedCookies = [];
 
     // 1. Try inserting into the Host's Google Calendar via OAuth API
     if (hostConfig.googleAccessToken && !String(hostConfig.googleAccessToken).startsWith('demo_token_')) {
@@ -884,6 +1071,7 @@ export const ALL = async (context) => {
       }
       if (hostApiRes.ok) {
         googleEventCreated = true;
+        googleEventId = hostApiRes.eventId || null;
         googleEventHtmlLink = hostApiRes.htmlLink || null;
         googleHangoutLink = hostApiRes.hangoutLink || null;
       } else {
@@ -892,17 +1080,33 @@ export const ALL = async (context) => {
     }
 
     // 2. If visitor is logged in with Google OAuth (and event wasn't already created on the same account), insert into Visitor's Google Calendar too
+    const visitorConfig = visitorUser ? loadSyncConfig(visitorUser) : null;
+    const visitorAccessToken = sessionData?.accessToken || visitorConfig?.googleAccessToken || null;
+    const visitorRefreshToken = sessionData?.refreshToken || visitorConfig?.googleRefreshToken || null;
     const visitorIsSameAsHost = visitorUser && effectiveHostEmail && visitorUser.email?.toLowerCase() === effectiveHostEmail.toLowerCase();
-    if (sessionData?.accessToken && !visitorUser?.isDemo && (!googleEventCreated || !visitorIsSameAsHost)) {
+
+    if (visitorAccessToken && !visitorUser?.isDemo && !String(visitorAccessToken).startsWith('demo_token_') && (!googleEventCreated || !visitorIsSameAsHost)) {
       const visitorApiRes = await createGoogleCalendarEvent(
-        sessionData.accessToken,
-        sessionData.refreshToken || null,
+        visitorAccessToken,
+        visitorRefreshToken,
         rawMeeting,
         effectiveHostName,
         effectiveHostEmail
       );
+      if (visitorApiRes.newAccessToken) {
+        if (visitorConfig) visitorConfig.googleAccessToken = visitorApiRes.newAccessToken;
+        if (sessionData) {
+          const newSessionToken = signSession({
+            ...sessionData,
+            accessToken: visitorApiRes.newAccessToken,
+            tokenExpiresAt: new Date(Date.now() + 3600 * 1000).toISOString()
+          });
+          updatedCookies.push(...buildAuthCookies(newSessionToken, url.protocol === 'https:'));
+        }
+      }
       if (visitorApiRes.ok) {
         googleEventCreated = true;
+        if (!googleEventId) googleEventId = visitorApiRes.eventId || null;
         if (!googleEventHtmlLink) googleEventHtmlLink = visitorApiRes.htmlLink || null;
         if (!googleHangoutLink) googleHangoutLink = visitorApiRes.hangoutLink || null;
       } else if (!googleCalendarError) {
@@ -916,6 +1120,7 @@ export const ALL = async (context) => {
       hostName: effectiveHostName,
       hostSlug: hostSlug || hostConfig.hostSlug || slugifyName(effectiveHostName),
       locationUrl: googleHangoutLink || rawMeeting.locationUrl || 'https://meet.google.com/new',
+      googleEventId,
       googleEventHtmlLink: googleEventHtmlLink || null,
       googleEventCreated,
       status: 'upcoming'
@@ -939,10 +1144,14 @@ export const ALL = async (context) => {
       const exists = hostMeetings.some(m => m.id === enrichedMeeting.id);
       if (!exists) {
         hostMeetings.unshift(enrichedMeeting);
-        saveMeetings(hostMeetings, effectiveHostKey, enrichedMeeting.hostSlug);
+      } else {
+        const idx = hostMeetings.findIndex(m => m.id === enrichedMeeting.id);
+        if (idx !== -1) hostMeetings[idx] = enrichedMeeting;
       }
+      saveMeetings(hostMeetings, effectiveHostKey, enrichedMeeting.hostSlug);
 
       // Also add busy event to Host's syncConfig.events so the slot is immediately blocked on the public page
+      hostConfig.connected = true;
       hostConfig.events = Array.isArray(hostConfig.events) ? hostConfig.events : [];
       if (!hostConfig.events.some(ev => ev.id === busyEvent.id)) {
         hostConfig.events.push(busyEvent);
@@ -956,38 +1165,59 @@ export const ALL = async (context) => {
 
     // 4. If visitor is logged in as a different user, also save to visitor's meetings list and calendar events
     const visitorKey = visitorUser ? (visitorUser.email || visitorUser.id) : null;
-    if (visitorKey && visitorKey !== effectiveHostKey) {
-      const visitorMeetings = loadMeetings(visitorKey);
+    if (visitorKey && visitorKey !== effectiveHostKey && visitorConfig) {
+      const visitorSlug = visitorConfig.hostSlug || slugifyName(visitorUser.name);
+      const visitorMeetings = loadMeetings(visitorKey, visitorSlug);
       if (!visitorMeetings.some(m => m.id === enrichedMeeting.id)) {
         visitorMeetings.unshift(enrichedMeeting);
-        saveMeetings(visitorMeetings, visitorKey);
       }
-      const visitorConfig = loadSyncConfig(visitorUser);
+      saveMeetings(visitorMeetings, visitorKey, visitorSlug);
+      visitorConfig.connected = true;
+      visitorConfig.calendarName = visitorConfig.calendarName || `${visitorUser.name} (${visitorUser.email})`;
       visitorConfig.events = Array.isArray(visitorConfig.events) ? visitorConfig.events : [];
       if (!visitorConfig.events.some(ev => ev.id === busyEvent.id)) {
         visitorConfig.events.push(busyEvent);
       }
       visitorConfig.lastSync = new Date().toISOString();
-      saveSyncConfig(visitorConfig, visitorUser);
+      saveSyncConfig(visitorConfig, visitorUser, visitorSlug);
     }
 
     return jsonResponse({
       success: true,
       meeting: enrichedMeeting,
       googleEventCreated,
+      googleEventId,
       googleEventHtmlLink,
       hangoutLink: googleHangoutLink,
       warning: googleCalendarError
-    });
+    }, 200, {}, updatedCookies);
   }
 
   // --- Calendar: Sync Meetings (Strictly Per Authenticated User) ---
   if (pathname === '/api/calendar/sync-meetings' && method === 'POST') {
-    const user = getSessionUser(request);
+    const sessionData = getSessionData(request);
+    const user = sessionData?.user || null;
     const body = await readRequestBody(request);
     const meetings = Array.isArray(body.meetings) ? body.meetings : [];
     if (user) {
-      saveMeetings(meetings, user);
+      const userSlug = slugifyName(user.name);
+      saveMeetings(meetings, user, userSlug);
+      const config = loadSyncConfig(user);
+      const activeToken = sessionData?.accessToken || config.googleAccessToken || null;
+      const activeRefresh = sessionData?.refreshToken || config.googleRefreshToken || null;
+      if (activeToken && !user.isDemo && !String(activeToken).startsWith('demo_token_')) {
+        const allMeetings = loadMeetings(user, userSlug);
+        const pendingSync = await syncPendingMeetingsToGoogleCalendar(
+          activeToken,
+          activeRefresh,
+          allMeetings,
+          config.events || [],
+          user
+        );
+        if (pendingSync.updated) {
+          saveMeetings(pendingSync.meetings, user, userSlug);
+        }
+      }
     }
     return jsonResponse({ success: true, count: meetings.length });
   }

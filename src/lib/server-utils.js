@@ -263,90 +263,79 @@ export function resolvePublicHostConfig(hostSlug = null, hostToken = null) {
   const cleanSlug = hostSlug ? slugifyName(hostSlug) : (tokenData?.slug || null);
 
   try {
+    let byUser = {};
+    let bySlug = {};
     if (fs.existsSync(SYNC_FILE)) {
       const data = JSON.parse(fs.readFileSync(SYNC_FILE, 'utf-8'));
-      const byUser = data.byUser || {};
-      const bySlug = data.bySlug || {};
+      byUser = data.byUser || {};
+      bySlug = data.bySlug || {};
+    }
 
-      // 1. Direct lookup by userKey from decrypted hostToken
-      if (tokenData?.userKey && byUser[tokenData.userKey]) {
-        const cfg = byUser[tokenData.userKey];
+    // 1. Direct lookup or cold-start restoration by userKey from decrypted hostToken
+    if (tokenData && tokenData.userKey) {
+      const existingCfg = byUser[tokenData.userKey] || {};
+      const mergedConfig = {
+        ...createDefaultSyncConfig(),
+        ...existingCfg,
+        connected: !!(existingCfg.connected || tokenData.connected || tokenData.googleAccessToken),
+        syncMode: existingCfg.syncMode || tokenData.syncMode || (tokenData.googleAccessToken ? 'google_oauth' : null),
+        calendarName: existingCfg.calendarName || tokenData.calendarName || `${tokenData.name || 'Anfitrión'} (${tokenData.email || ''})`,
+        hostPublicName: existingCfg.hostPublicName || tokenData.name || 'Agenda de Reuniones',
+        hostEmail: existingCfg.hostEmail || tokenData.email || null,
+        hostSlug: existingCfg.hostSlug || tokenData.slug || slugifyName(tokenData.name),
+        icalUrl: existingCfg.icalUrl || tokenData.icalUrl || '',
+        googleAccessToken: existingCfg.googleAccessToken || tokenData.googleAccessToken || null,
+        googleRefreshToken: existingCfg.googleRefreshToken || tokenData.googleRefreshToken || null,
+        events: Array.isArray(existingCfg.events) ? existingCfg.events : []
+      };
+      saveSyncConfig(mergedConfig, tokenData.userKey, mergedConfig.hostSlug);
+      return {
+        userKey: tokenData.userKey,
+        config: mergedConfig
+      };
+    }
+
+    // 2. Lookup by hostSlug in bySlug or byUser
+    if (cleanSlug) {
+      const mappedKey = bySlug[cleanSlug] || bySlug[hostSlug];
+      if (mappedKey && byUser[mappedKey]) {
         return {
-          userKey: tokenData.userKey,
-          config: {
-            ...createDefaultSyncConfig(),
-            ...cfg,
-            googleAccessToken: cfg.googleAccessToken || tokenData.googleAccessToken || null,
-            googleRefreshToken: cfg.googleRefreshToken || tokenData.googleRefreshToken || null,
-            icalUrl: cfg.icalUrl || tokenData.icalUrl || ''
-          }
+          userKey: mappedKey,
+          config: { ...createDefaultSyncConfig(), ...byUser[mappedKey] }
         };
       }
-
-      // 2. Lookup by hostSlug in bySlug or byUser
-      if (cleanSlug) {
-        const mappedKey = bySlug[cleanSlug] || bySlug[hostSlug];
-        if (mappedKey && byUser[mappedKey]) {
+      for (const [uKey, cfg] of Object.entries(byUser)) {
+        if (
+          cfg.hostSlug === cleanSlug ||
+          slugifyName(cfg.hostPublicName) === cleanSlug ||
+          (cfg.hostEmail && slugifyName(cfg.hostEmail.split('@')[0]) === cleanSlug)
+        ) {
           return {
-            userKey: mappedKey,
-            config: { ...createDefaultSyncConfig(), ...byUser[mappedKey] }
+            userKey: uKey,
+            config: { ...createDefaultSyncConfig(), ...cfg }
           };
         }
-        for (const [uKey, cfg] of Object.entries(byUser)) {
-          if (
-            cfg.hostSlug === cleanSlug ||
-            slugifyName(cfg.hostPublicName) === cleanSlug ||
-            (cfg.hostEmail && slugifyName(cfg.hostEmail.split('@')[0]) === cleanSlug)
-          ) {
-            return {
-              userKey: uKey,
-              config: { ...createDefaultSyncConfig(), ...cfg }
-            };
-          }
-        }
       }
+    }
 
-      // 3. Fallback when booking via a generic event link (e.g. #/book/reunion-15-min) without user slug:
-      // Find the most recently active host who has connected a calendar or logged in
-      const entries = Object.entries(byUser);
-      const connectedEntry = entries.find(([, cfg]) => cfg && (cfg.connected || cfg.googleAccessToken));
-      if (connectedEntry) {
-        return {
-          userKey: connectedEntry[0],
-          config: { ...createDefaultSyncConfig(), ...connectedEntry[1] }
-        };
-      }
-      if (entries.length > 0) {
-        return {
-          userKey: entries[0][0],
-          config: { ...createDefaultSyncConfig(), ...entries[0][1] }
-        };
-      }
+    // 3. Fallback when booking via a generic event link (e.g. #/book/reunion-15-min) without user slug:
+    // Find the most recently active host who has connected a calendar or logged in
+    const entries = Object.entries(byUser);
+    const connectedEntry = entries.find(([, cfg]) => cfg && (cfg.connected || cfg.googleAccessToken));
+    if (connectedEntry && !cleanSlug) {
+      return {
+        userKey: connectedEntry[0],
+        config: { ...createDefaultSyncConfig(), ...connectedEntry[1] }
+      };
+    }
+    if (entries.length > 0 && !cleanSlug) {
+      return {
+        userKey: entries[0][0],
+        config: { ...createDefaultSyncConfig(), ...entries[0][1] }
+      };
     }
   } catch (e) {
     console.error('Error resolving public host config:', e);
-  }
-
-  // 4. Cold-start restoration from encrypted hostToken if /tmp was wiped
-  if (tokenData && tokenData.userKey) {
-    const restoredConfig = {
-      ...createDefaultSyncConfig(),
-      connected: !!tokenData.connected,
-      syncMode: tokenData.syncMode || null,
-      calendarName: tokenData.calendarName || `${tokenData.name || 'Anfitrión'} (${tokenData.email || ''})`,
-      hostPublicName: tokenData.name || 'Agenda de Reuniones',
-      hostEmail: tokenData.email || null,
-      hostSlug: tokenData.slug || slugifyName(tokenData.name),
-      icalUrl: tokenData.icalUrl || '',
-      googleAccessToken: tokenData.googleAccessToken || null,
-      googleRefreshToken: tokenData.googleRefreshToken || null,
-      events: []
-    };
-    saveSyncConfig(restoredConfig, tokenData.userKey, restoredConfig.hostSlug);
-    return {
-      userKey: tokenData.userKey,
-      config: restoredConfig
-    };
   }
 
   return {
@@ -473,6 +462,40 @@ export function loadMeetings(userId = null, hostSlug = null) {
   return [];
 }
 
+export function getTimezoneOffsetString(timeZone = 'America/Santiago', refDate = new Date()) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      timeZoneName: 'longOffset'
+    }).formatToParts(refDate);
+    const tzPart = parts.find(p => p.type === 'timeZoneName')?.value || '';
+    const match = tzPart.match(/GMT([+-]\d{2}:\d{2})/);
+    if (match) return match[1];
+    if (tzPart === 'GMT' || tzPart === 'UTC') return '+00:00';
+  } catch {
+    // fallback below
+  }
+  return '-03:00';
+}
+
+export function normalizeDateTimeWithOffset(rawDateTime, timeZone = 'America/Santiago') {
+  const str = String(rawDateTime || '').trim();
+  if (!str) return new Date().toISOString();
+  // If already has Z or ±HH:MM offset at the end, return as-is
+  if (/(?:Z|[+-]\d{2}:\d{2})$/i.test(str)) {
+    return str;
+  }
+  const localMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (localMatch) {
+    const [, y, m, d, hh, mm, ss = '00'] = localMatch;
+    const approxDate = new Date(Date.UTC(+y, +m - 1, +d, +hh, +mm, +ss));
+    const offset = getTimezoneOffsetString(timeZone, approxDate);
+    return `${y}-${m}-${d}T${hh}:${mm}:${ss}${offset}`;
+  }
+  const parsed = new Date(str);
+  return isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+}
+
 export function saveMeetings(meetings, userId = null, hostSlug = null) {
   const cleanKey = getUserKey(userId);
   const derivedSlug = hostSlug || (typeof userId === 'object' && userId?.name ? slugifyName(userId.name) : null);
@@ -490,9 +513,26 @@ export function saveMeetings(meetings, userId = null, hostSlug = null) {
         existing = { byUser: {}, bySlug: {} };
       }
     }
-    const list = Array.isArray(meetings) ? meetings : [];
-    if (cleanKey) existing.byUser[cleanKey] = list;
-    if (derivedSlug) existing.bySlug[derivedSlug] = list;
+    const incomingList = Array.isArray(meetings) ? meetings : [];
+    const mergeLists = (prevList = [], nextList = []) => {
+      const byId = new Map();
+      for (const item of nextList) {
+        if (item && item.id) byId.set(item.id, item);
+      }
+      for (const item of prevList) {
+        if (item && item.id && !byId.has(item.id)) {
+          byId.set(item.id, item);
+        }
+      }
+      return Array.from(byId.values());
+    };
+
+    if (cleanKey) {
+      existing.byUser[cleanKey] = mergeLists(existing.byUser[cleanKey] || [], incomingList);
+    }
+    if (derivedSlug) {
+      existing.bySlug[derivedSlug] = mergeLists(existing.bySlug[derivedSlug] || [], incomingList);
+    }
     fs.writeFileSync(MEETINGS_FILE, JSON.stringify(existing, null, 2), 'utf-8');
   } catch (e) {
     console.error('Error saving meetings file:', e);
@@ -503,10 +543,12 @@ export function mergeMeetingsIntoEvents(events = [], meetings = []) {
   const result = Array.isArray(events) ? [...events] : [];
   const upcoming = (Array.isArray(meetings) ? meetings : []).filter(m => m && m.status === 'upcoming' && m.dateTime);
   for (const m of upcoming) {
-    const exists = result.some(ev => ev && (ev.id === m.id || (ev.start && new Date(ev.start).getTime() === new Date(m.dateTime).getTime())));
+    const normDateStr = normalizeDateTimeWithOffset(m.dateTime, m.timeZone || 'America/Santiago');
+    const startObj = new Date(normDateStr);
+    if (isNaN(startObj.getTime())) continue;
+    const endObj = new Date(startObj.getTime() + (Number(m.duration) || 30) * 60000);
+    const exists = result.some(ev => ev && (ev.id === m.id || (ev.start && Math.abs(new Date(ev.start).getTime() - startObj.getTime()) < 60000)));
     if (!exists) {
-      const startObj = new Date(m.dateTime);
-      const endObj = new Date(startObj.getTime() + (Number(m.duration) || 30) * 60000);
       result.push({
         id: m.id,
         summary: `${m.eventTitle || 'Reunión'} con ${m.inviteeName || 'Invitado'}`,
@@ -710,22 +752,55 @@ export async function fetchGoogleCalendarApiEvents(accessToken, refreshToken = n
     const data = await response.json();
     const items = Array.isArray(data.items) ? data.items : [];
 
-    const events = items
+    const validItems = items.filter(item => {
+      if (!item || item.status === 'cancelled') return false;
+      if (item.transparency === 'transparent') return false; // Free / non-blocking event
+      return !!(item.start?.dateTime || item.start?.date);
+    });
+
+    const events = validItems.map((item, idx) => {
+      const startIso = item.start.dateTime || `${item.start.date}T00:00:00`;
+      const endIso = item.end?.dateTime || (item.end?.date ? `${item.end.date}T23:59:59` : startIso);
+      const priv = item.extendedProperties?.private || {};
+      return {
+        id: priv.meetingId || item.id || `gcal-oauth-${idx}`,
+        googleEventId: item.id || null,
+        summary: item.summary || 'Ocupado (Google Calendar)',
+        start: startIso,
+        end: endIso,
+        location: item.location || item.hangoutLink || 'Google Calendar',
+        status: (item.status || 'CONFIRMED').toUpperCase()
+      };
+    });
+
+    const reunionesMeetings = validItems
       .filter(item => {
-        if (!item || item.status === 'cancelled') return false;
-        if (item.transparency === 'transparent') return false; // Free / non-blocking event
-        return !!(item.start?.dateTime || item.start?.date);
+        const priv = item.extendedProperties?.private || {};
+        if (priv.reunionesBooking === 'true') return true;
+        return typeof item.description === 'string' && item.description.includes('Reunión programada:');
       })
-      .map((item, idx) => {
-        const startIso = item.start.dateTime || `${item.start.date}T00:00:00`;
-        const endIso = item.end?.dateTime || (item.end?.date ? `${item.end.date}T23:59:59` : startIso);
+      .map(item => {
+        const priv = item.extendedProperties?.private || {};
+        const startIso = item.start.dateTime || `${item.start.date}T09:00:00`;
+        const endIso = item.end?.dateTime || startIso;
+        const calcDur = Math.max(15, Math.round((new Date(endIso) - new Date(startIso)) / 60000) || 30);
+        const firstAttendee = Array.isArray(item.attendees) && item.attendees.length > 0 ? item.attendees[0] : {};
         return {
-          id: item.id || `gcal-oauth-${idx}`,
-          summary: item.summary || 'Ocupado (Google Calendar)',
-          start: startIso,
-          end: endIso,
-          location: item.location || item.hangoutLink || 'Google Calendar',
-          status: (item.status || 'CONFIRMED').toUpperCase()
+          id: priv.meetingId || `gcal-${item.id}`,
+          googleEventId: item.id,
+          googleEventCreated: true,
+          eventTypeId: priv.eventTypeId || 'ev-1',
+          eventTitle: priv.eventTitle || (item.summary ? item.summary.split(':')[0].trim() : 'Reunión'),
+          eventColor: priv.eventColor || '#006bff',
+          duration: Number(priv.duration) || calcDur,
+          location: item.location || 'Google Meet',
+          locationUrl: item.hangoutLink || item.location || 'https://meet.google.com/new',
+          inviteeName: priv.inviteeName || firstAttendee.displayName || 'Invitado',
+          inviteeEmail: priv.inviteeEmail || firstAttendee.email || '',
+          inviteePhone: priv.inviteePhone || '',
+          inviteeNotes: priv.inviteeNotes || '',
+          dateTime: startIso,
+          status: 'upcoming'
         };
       });
 
@@ -733,6 +808,7 @@ export async function fetchGoogleCalendarApiEvents(accessToken, refreshToken = n
       ok: true,
       calendarSummary: data.summary || null,
       events,
+      reunionesMeetings,
       newAccessToken: refreshedToken
     };
   } catch (err) {
@@ -746,131 +822,148 @@ export async function fetchGoogleCalendarApiEvents(accessToken, refreshToken = n
 }
 
 export async function createGoogleCalendarEvent(accessToken, refreshToken = null, meeting = {}, hostName = 'Anfitrión', hostEmail = null) {
-  if (!accessToken || accessToken.startsWith('demo_token_')) {
+  if (!accessToken || String(accessToken).startsWith('demo_token_')) {
     return { ok: false, error: 'No Google OAuth access token available for calendar insertion' };
   }
 
-  const timeZone = meeting.timeZone || 'America/Santiago';
-  const durationMinutes = Number(meeting.duration) || 30;
-
-  // Build start and end dateTime strings
-  const rawDateTime = String(meeting.dateTime || '');
-  let startDateTimeStr = rawDateTime;
-  let endDateTimeStr = '';
-
-  // If rawDateTime is "YYYY-MM-DDTHH:mm:ss" (without Z or offset), calculate end in the same local wall-clock time
-  const localMatch = rawDateTime.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
-  if (localMatch) {
-    const [, y, m, d, hh, mm, ss = '00'] = localMatch;
-    const utcMs = Date.UTC(+y, +m - 1, +d, +hh, +mm, +ss);
-    const endUtc = new Date(utcMs + durationMinutes * 60000);
-    const pad = (n) => String(n).padStart(2, '0');
-    startDateTimeStr = `${y}-${m}-${d}T${hh}:${mm}:${ss}`;
-    endDateTimeStr = `${endUtc.getUTCFullYear()}-${pad(endUtc.getUTCMonth() + 1)}-${pad(endUtc.getUTCDate())}T${pad(endUtc.getUTCHours())}:${pad(endUtc.getUTCMinutes())}:${pad(endUtc.getUTCSeconds())}`;
-  } else {
-    const startObj = new Date(rawDateTime);
-    const endObj = new Date(startObj.getTime() + durationMinutes * 60000);
-    startDateTimeStr = startObj.toISOString();
-    endDateTimeStr = endObj.toISOString();
-  }
-
-  const attendees = [];
-  if (meeting.inviteeEmail && meeting.inviteeEmail.includes('@')) {
-    attendees.push({
-      email: meeting.inviteeEmail.trim(),
-      displayName: meeting.inviteeName || 'Invitado'
-    });
-  }
-  if (hostEmail && hostEmail.includes('@') && hostEmail.toLowerCase().trim() !== (meeting.inviteeEmail || '').toLowerCase().trim()) {
-    attendees.push({
-      email: hostEmail.trim(),
-      displayName: hostName || 'Anfitrión'
-    });
-  }
-
-  const descriptionLines = [
-    `Reunión programada: ${meeting.eventTitle || 'Reunión'}`,
-    `Anfitrión: ${hostName}`,
-    `Invitado: ${meeting.inviteeName || 'Invitado'} (${meeting.inviteeEmail || ''})`
-  ];
-  if (meeting.inviteePhone) descriptionLines.push(`Teléfono: ${meeting.inviteePhone}`);
-  if (meeting.inviteeNotes) descriptionLines.push(`Notas: ${meeting.inviteeNotes}`);
-  if (meeting.locationUrl) descriptionLines.push(`Enlace de reunión: ${meeting.locationUrl}`);
-
-  const baseEventBody = {
-    summary: `${meeting.eventTitle || 'Reunión'}: ${meeting.inviteeName || 'Invitado'} y ${hostName}`,
-    description: descriptionLines.join('\n'),
-    location: meeting.locationUrl || meeting.location || 'Google Meet',
-    start: {
-      dateTime: startDateTimeStr,
-      timeZone
-    },
-    end: {
-      dateTime: endDateTimeStr,
-      timeZone
-    },
-    attendees,
-    reminders: {
-      useDefault: true
-    }
-  };
-
-  const eventBodyWithMeet = {
-    ...baseEventBody,
-    conferenceData: {
-      createRequest: {
-        requestId: `meet-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
-        conferenceSolutionKey: { type: 'hangoutsMeet' }
-      }
-    }
-  };
-
-  const baseEventBodyNoAttendees = {
-    summary,
-    description,
-    location,
-    start: {
-      dateTime: startDateTimeStr,
-      timeZone: tz
-    },
-    end: {
-      dateTime: endDateTimeStr,
-      timeZone: tz
-    },
-    reminders: {
-      useDefault: false,
-      overrides: [
-        { method: 'email', minutes: 60 },
-        { method: 'popup', minutes: 10 }
-      ]
-    }
-  };
-
-  let currentToken = accessToken;
   let refreshedToken = null;
 
-  const postEvent = async (token, mode = 'full') => {
-    let query = 'conferenceDataVersion=1&sendUpdates=all';
-    let payload = eventBodyWithMeet;
-    if (mode === 'no_conference') {
-      query = 'sendUpdates=all';
-      payload = baseEventBody;
-    } else if (mode === 'basic') {
-      query = 'sendUpdates=none';
-      payload = baseEventBodyNoAttendees;
-    }
-    const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?${query}`;
-    return fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
-  };
-
   try {
+    const timeZone = meeting.timeZone || 'America/Santiago';
+    const durationMinutes = Number(meeting.duration) || 30;
+
+    // Build RFC3339 start and end dateTime strings with explicit timezone offset
+    const rawDateTime = String(meeting.dateTime || '');
+    const startDateTimeStr = normalizeDateTimeWithOffset(rawDateTime, timeZone);
+    const startObj = new Date(startDateTimeStr);
+    const endObj = new Date(startObj.getTime() + durationMinutes * 60000);
+
+    // Format endDateTimeStr preserving the same offset when possible
+    let endDateTimeStr = endObj.toISOString();
+    const offsetMatch = startDateTimeStr.match(/([+-]\d{2}:\d{2})$/);
+    if (offsetMatch) {
+      const offsetStr = offsetMatch[1];
+      const sign = offsetStr.startsWith('-') ? -1 : 1;
+      const [offH, offM] = offsetStr.slice(1).split(':').map(Number);
+      const offsetMs = sign * (offH * 60 + offM) * 60000;
+      const localEnd = new Date(endObj.getTime() + offsetMs);
+      const pad = (n) => String(n).padStart(2, '0');
+      endDateTimeStr = `${localEnd.getUTCFullYear()}-${pad(localEnd.getUTCMonth() + 1)}-${pad(localEnd.getUTCDate())}T${pad(localEnd.getUTCHours())}:${pad(localEnd.getUTCMinutes())}:${pad(localEnd.getUTCSeconds())}${offsetStr}`;
+    }
+
+    const attendees = [];
+    if (meeting.inviteeEmail && meeting.inviteeEmail.includes('@')) {
+      attendees.push({
+        email: meeting.inviteeEmail.trim(),
+        displayName: meeting.inviteeName || 'Invitado'
+      });
+    }
+    if (hostEmail && hostEmail.includes('@') && hostEmail.toLowerCase().trim() !== (meeting.inviteeEmail || '').toLowerCase().trim()) {
+      attendees.push({
+        email: hostEmail.trim(),
+        displayName: hostName || 'Anfitrión'
+      });
+    }
+
+    const descriptionLines = [
+      `Reunión programada: ${meeting.eventTitle || 'Reunión'}`,
+      `Anfitrión: ${hostName}`,
+      `Invitado: ${meeting.inviteeName || 'Invitado'} (${meeting.inviteeEmail || ''})`
+    ];
+    if (meeting.inviteePhone) descriptionLines.push(`Teléfono: ${meeting.inviteePhone}`);
+    if (meeting.inviteeNotes) descriptionLines.push(`Notas: ${meeting.inviteeNotes}`);
+    if (meeting.locationUrl) descriptionLines.push(`Enlace de reunión: ${meeting.locationUrl}`);
+
+    const summaryText = `${meeting.eventTitle || 'Reunión'}: ${meeting.inviteeName || 'Invitado'} y ${hostName}`;
+    const descriptionText = descriptionLines.join('\n');
+    const locationText = meeting.locationUrl || meeting.location || 'Google Meet';
+
+    const extendedProperties = {
+      private: {
+        reunionesBooking: 'true',
+        meetingId: String(meeting.id || ''),
+        eventTypeId: String(meeting.eventTypeId || 'ev-1'),
+        eventTitle: String(meeting.eventTitle || 'Reunión'),
+        eventColor: String(meeting.eventColor || '#006bff'),
+        duration: String(durationMinutes),
+        inviteeName: String(meeting.inviteeName || 'Invitado'),
+        inviteeEmail: String(meeting.inviteeEmail || ''),
+        inviteePhone: String(meeting.inviteePhone || ''),
+        inviteeNotes: String(meeting.inviteeNotes || '').slice(0, 500),
+        hostName: String(hostName || '')
+      }
+    };
+
+    const baseEventBody = {
+      summary: summaryText,
+      description: descriptionText,
+      location: locationText,
+      start: {
+        dateTime: startDateTimeStr,
+        timeZone
+      },
+      end: {
+        dateTime: endDateTimeStr,
+        timeZone
+      },
+      attendees,
+      extendedProperties,
+      reminders: {
+        useDefault: true
+      }
+    };
+
+    const eventBodyWithMeet = {
+      ...baseEventBody,
+      conferenceData: {
+        createRequest: {
+          requestId: `meet-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+          conferenceSolutionKey: { type: 'hangoutsMeet' }
+        }
+      }
+    };
+
+    const baseEventBodyNoAttendees = {
+      summary: summaryText,
+      description: descriptionText,
+      location: locationText,
+      start: {
+        dateTime: startDateTimeStr,
+        timeZone
+      },
+      end: {
+        dateTime: endDateTimeStr,
+        timeZone
+      },
+      extendedProperties,
+      reminders: {
+        useDefault: true
+      }
+    };
+
+    let currentToken = accessToken;
+
+    const postEvent = async (token, mode = 'full') => {
+      let query = 'conferenceDataVersion=1&sendUpdates=all';
+      let payload = eventBodyWithMeet;
+      if (mode === 'no_conference') {
+        query = 'sendUpdates=all';
+        payload = baseEventBody;
+      } else if (mode === 'basic') {
+        query = 'sendUpdates=none';
+        payload = baseEventBodyNoAttendees;
+      }
+      const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?${query}`;
+      return fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+    };
+
     let response = await postEvent(currentToken, 'full');
 
     if (response.status === 401 && refreshToken) {
@@ -919,6 +1012,60 @@ export async function createGoogleCalendarEvent(accessToken, refreshToken = null
       newAccessToken: refreshedToken
     };
   }
+}
+
+export async function syncPendingMeetingsToGoogleCalendar(accessToken, refreshToken = null, meetings = [], existingEvents = [], user = null) {
+  if (!accessToken || String(accessToken).startsWith('demo_token_') || !Array.isArray(meetings) || meetings.length === 0) {
+    return { updated: false, meetings, newAccessToken: null };
+  }
+
+  const seedIds = new Set(['meet-1', 'meet-2', 'meet-3']);
+  let currentToken = accessToken;
+  let latestNewToken = null;
+  let updated = false;
+  const hostName = (user && user.name) || 'Anfitrión';
+  const hostEmail = (user && user.email) || null;
+
+  for (const m of meetings) {
+    if (!m || !m.id || seedIds.has(m.id)) continue;
+    if (m.status !== 'upcoming' || !m.dateTime) continue;
+    if (m.googleEventCreated) continue;
+
+    const normStart = new Date(normalizeDateTimeWithOffset(m.dateTime, m.timeZone || 'America/Santiago'));
+    if (isNaN(normStart.getTime())) continue;
+
+    const alreadyInEvents = Array.isArray(existingEvents) && existingEvents.some(ev => {
+      if (!ev) return false;
+      if (ev.id === m.id) return true;
+      if (ev.start && Math.abs(new Date(ev.start).getTime() - normStart.getTime()) < 60000) {
+        const sum = (ev.summary || '').toLowerCase();
+        const inv = (m.inviteeName || '').toLowerCase();
+        if (inv && sum.includes(inv)) return true;
+      }
+      return false;
+    });
+
+    if (alreadyInEvents) {
+      m.googleEventCreated = true;
+      updated = true;
+      continue;
+    }
+
+    const res = await createGoogleCalendarEvent(currentToken, refreshToken, m, m.hostName || hostName, hostEmail);
+    if (res.newAccessToken) {
+      currentToken = res.newAccessToken;
+      latestNewToken = res.newAccessToken;
+    }
+    if (res.ok) {
+      m.googleEventCreated = true;
+      if (res.eventId) m.googleEventId = res.eventId;
+      if (res.htmlLink) m.googleEventHtmlLink = res.htmlLink;
+      if (res.hangoutLink) m.locationUrl = res.hangoutLink;
+      updated = true;
+    }
+  }
+
+  return { updated, meetings, newAccessToken: latestNewToken };
 }
 
 export function generateIcsFeed(meetings = []) {
