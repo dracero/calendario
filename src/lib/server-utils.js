@@ -1208,15 +1208,12 @@ export function generateSingleIcs(meeting = {}, hostName = 'Anfitrión', hostEma
   ].filter(Boolean).join('\r\n');
 }
 
-export async function sendWorkflowEmail({ type = 'confirmation', meeting = {}, hostName = 'Anfitrión', hostEmail = null, reason = '' }) {
+export async function sendWorkflowEmail({ type = 'confirmation', meeting = {}, hostName = 'Anfitrión', hostEmail = null, reason = '', googleAccessToken = null }) {
   if (!meeting || !meeting.inviteeEmail) {
     return { ok: false, error: 'Correo de invitado no proporcionado' };
   }
 
   const isConfirmation = type === 'confirmation' || type === 'booking_created';
-  const subjectPrefix = isConfirmation ? '✓ Confirmado:' : '✕ Cancelado:';
-  const subject = `${subjectPrefix} ${meeting.eventTitle || 'Reunión'} con ${hostName}`;
-
   const meetLink = meeting.locationUrl || 'https://meet.google.com/new';
   const meetingDateStr = meeting.dateTime ? new Date(meeting.dateTime).toLocaleString('es-ES', {
     weekday: 'long',
@@ -1227,21 +1224,33 @@ export async function sendWorkflowEmail({ type = 'confirmation', meeting = {}, h
     minute: '2-digit'
   }) : 'Fecha no especificada';
 
-  const htmlContent = `
+  const icsData = generateSingleIcs(
+    meeting,
+    hostName,
+    hostEmail,
+    isConfirmation ? 'CONFIRMED' : 'CANCELLED',
+    isConfirmation ? 'REQUEST' : 'CANCEL'
+  );
+
+  const buildHtml = (isForHost = false) => `
     <!DOCTYPE html>
     <html>
     <head><meta charset="utf-8"></head>
     <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc; padding: 24px; color: #1e293b;">
       <div style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
         <div style="background: ${isConfirmation ? '#006bff' : '#e11d48'}; padding: 20px 24px; color: #ffffff;">
-          <h2 style="margin: 0; font-size: 1.25rem;">${isConfirmation ? '¡Tu reunión está programada!' : 'Reunión cancelada'}</h2>
+          <h2 style="margin: 0; font-size: 1.25rem;">
+            ${isForHost
+              ? (isConfirmation ? '🔔 ¡Nueva reunión agendada en tu calendario!' : '⚠️ Reunión cancelada por un invitado')
+              : (isConfirmation ? '¡Tu reunión está programada!' : 'Reunión cancelada')
+            }
+          </h2>
         </div>
         <div style="padding: 24px;">
-          <p style="font-size: 1rem; margin-top: 0;">Hola <strong>${meeting.inviteeName || 'Invitado'}</strong>,</p>
-          <p style="font-size: 0.95rem; color: #475569;">
-            ${isConfirmation
-              ? `Tu cita con <strong>${hostName}</strong> ha sido confirmada y agendada.`
-              : `La cita con <strong>${hostName}</strong> ha sido cancelada y el horario ha sido liberado.`
+          <p style="font-size: 1rem; margin-top: 0;">
+            ${isForHost
+              ? `Hola <strong>${hostName}</strong>, se ha ${isConfirmation ? 'agendado' : 'cancelado'} una reunión con <strong>${meeting.inviteeName || 'un invitado'}</strong>.`
+              : `Hola <strong>${meeting.inviteeName || 'Invitado'}</strong>, tu cita con <strong>${hostName}</strong> ha sido ${isConfirmation ? 'confirmada y agendada' : 'cancelada'}.`
             }
           </p>
 
@@ -1249,7 +1258,8 @@ export async function sendWorkflowEmail({ type = 'confirmation', meeting = {}, h
             <div style="font-size: 1.1rem; font-weight: 700; color: #0f172a; margin-bottom: 8px;">${meeting.eventTitle || 'Reunión'}</div>
             <div style="font-size: 0.9rem; color: #334155; margin-bottom: 6px;">📅 <strong>Fecha:</strong> ${meetingDateStr}</div>
             <div style="font-size: 0.9rem; color: #334155; margin-bottom: 6px;">⏱️ <strong>Duración:</strong> ${meeting.duration || 30} minutos</div>
-            <div style="font-size: 0.9rem; color: #334155; margin-bottom: 6px;">👤 <strong>Anfitrión:</strong> ${hostName} ${hostEmail ? `(${hostEmail})` : ''}</div>
+            <div style="font-size: 0.9rem; color: #334155; margin-bottom: 6px;">👤 <strong>${isForHost ? 'Invitado' : 'Anfitrión'}:</strong> ${isForHost ? `${meeting.inviteeName || 'Invitado'} (${meeting.inviteeEmail})` : `${hostName} ${hostEmail ? `(${hostEmail})` : ''}`}</div>
+            ${meeting.inviteePhone ? `<div style="font-size: 0.9rem; color: #334155; margin-bottom: 6px;">📞 <strong>Teléfono invitado:</strong> ${meeting.inviteePhone}</div>` : ''}
             ${meeting.inviteeNotes ? `<div style="font-size: 0.85rem; color: #64748b; margin-top: 8px;">📝 <strong>Notas:</strong> ${meeting.inviteeNotes}</div>` : ''}
           </div>
 
@@ -1271,17 +1281,16 @@ export async function sendWorkflowEmail({ type = 'confirmation', meeting = {}, h
     </html>
   `;
 
-  const icsData = generateSingleIcs(
-    meeting,
-    hostName,
-    hostEmail,
-    isConfirmation ? 'CONFIRMED' : 'CANCELLED',
-    isConfirmation ? 'REQUEST' : 'CANCEL'
-  );
+  const recipients = [
+    { email: meeting.inviteeEmail, isHost: false, subject: `${isConfirmation ? '✓ Confirmado:' : '✕ Cancelado:'} ${meeting.eventTitle || 'Reunión'} con ${hostName}` }
+  ];
 
-  const recipients = [meeting.inviteeEmail];
   if (hostEmail && hostEmail.includes('@') && hostEmail.toLowerCase() !== meeting.inviteeEmail.toLowerCase()) {
-    recipients.push(hostEmail);
+    recipients.push({
+      email: hostEmail,
+      isHost: true,
+      subject: `${isConfirmation ? '🔔 Nueva reserva:' : '✕ Reserva cancelada:'} ${meeting.inviteeName || 'Invitado'} - ${meeting.eventTitle || 'Reunión'}`
+    });
   }
 
   // 1. Try Resend API if RESEND_API_KEY is configured
@@ -1289,31 +1298,32 @@ export async function sendWorkflowEmail({ type = 'confirmation', meeting = {}, h
   if (resendApiKey) {
     try {
       const fromAddr = getEnv('EMAIL_FROM') || 'Reuniones <onboarding@resend.dev>';
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${resendApiKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          from: fromAddr,
-          to: recipients,
-          subject,
-          html: htmlContent,
-          attachments: [
-            {
-              filename: 'reunion.ics',
-              content: Buffer.from(icsData).toString('base64'),
-              content_type: 'text/calendar; method=' + (isConfirmation ? 'REQUEST' : 'CANCEL')
-            }
-          ]
-        })
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        return { ok: true, provider: 'resend', id: data.id, recipients };
+      const sendResults = [];
+      for (const target of recipients) {
+        const res = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${resendApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            from: fromAddr,
+            to: target.email,
+            subject: target.subject,
+            html: buildHtml(target.isHost),
+            attachments: [
+              {
+                filename: 'reunion.ics',
+                content: Buffer.from(icsData).toString('base64'),
+                content_type: 'text/calendar; method=' + (isConfirmation ? 'REQUEST' : 'CANCEL')
+              }
+            ]
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        sendResults.push({ email: target.email, isHost: target.isHost, ok: res.ok, id: data.id, error: data.message });
       }
-      console.warn('Resend API returned error:', data);
+      return { ok: sendResults.some(r => r.ok), provider: 'resend', details: sendResults };
     } catch (err) {
       console.warn('Error sending via Resend API:', err.message);
     }
@@ -1336,19 +1346,27 @@ export async function sendWorkflowEmail({ type = 'confirmation', meeting = {}, h
         auth: { user: smtpUser, pass: smtpPass }
       });
 
-      const info = await transporter.sendMail({
-        from: fromAddr,
-        to: recipients.join(', '),
-        subject,
-        html: htmlContent,
-        icalEvent: {
-          filename: 'reunion.ics',
-          method: isConfirmation ? 'REQUEST' : 'CANCEL',
-          content: icsData
+      const sendResults = [];
+      for (const target of recipients) {
+        try {
+          const info = await transporter.sendMail({
+            from: fromAddr,
+            to: target.email,
+            subject: target.subject,
+            html: buildHtml(target.isHost),
+            icalEvent: {
+              filename: 'reunion.ics',
+              method: isConfirmation ? 'REQUEST' : 'CANCEL',
+              content: icsData
+            }
+          });
+          sendResults.push({ email: target.email, isHost: target.isHost, ok: true, messageId: info.messageId });
+        } catch (mailErr) {
+          sendResults.push({ email: target.email, isHost: target.isHost, ok: false, error: mailErr.message });
         }
-      });
+      }
 
-      return { ok: true, provider: 'smtp', messageId: info.messageId, recipients };
+      return { ok: sendResults.some(r => r.ok), provider: 'smtp', details: sendResults };
     } catch (err) {
       console.warn('Error sending via SMTP Nodemailer:', err.message);
       return { ok: false, error: err.message, provider: 'smtp' };
@@ -1359,8 +1377,8 @@ export async function sendWorkflowEmail({ type = 'confirmation', meeting = {}, h
   return {
     ok: false,
     configured: false,
-    reason: 'Faltan credenciales en .env (define RESEND_API_KEY o SMTP_USER y SMTP_PASS para envíos de correo reales).',
-    recipients,
+    reason: 'Faltan credenciales de email en Vercel (agrega RESEND_API_KEY o SMTP_USER/SMTP_PASS para notificar por email al anfitrión y al invitado).',
+    recipients: recipients.map(r => r.email),
     simulated: true
   };
 }
