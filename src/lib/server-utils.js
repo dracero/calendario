@@ -869,10 +869,18 @@ export async function createGoogleCalendarEvent(accessToken, refreshToken = null
 
     // Include any additional guest emails if present
     if (meeting.guests) {
-      const extraGuests = String(meeting.guests).split(/[,;\s]+/).map(g => g.trim()).filter(g => g.includes('@'));
+      const rawList = Array.isArray(meeting.guests) ? meeting.guests.join(',') : String(meeting.guests);
+      const extraGuests = rawList
+        .split(/[,;\s]+/)
+        .map(g => g.trim())
+        .filter(g => g.includes('@'));
       for (const g of extraGuests) {
         if (!attendees.some(a => a.email.toLowerCase() === g.toLowerCase())) {
-          attendees.push({ email: g });
+          attendees.push({
+            email: g,
+            displayName: 'Invitado adicional',
+            responseStatus: 'needsAction'
+          });
         }
       }
     }
@@ -880,8 +888,12 @@ export async function createGoogleCalendarEvent(accessToken, refreshToken = null
     const descriptionLines = [
       `Reunión programada: ${meeting.eventTitle || 'Reunión'}`,
       `Anfitrión: ${hostName}`,
-      `Invitado: ${meeting.inviteeName || 'Invitado'} (${meeting.inviteeEmail || ''})`
+      `Invitado principal: ${meeting.inviteeName || 'Invitado'} (${meeting.inviteeEmail || ''})`
     ];
+    if (meeting.guests) {
+      const guestListStr = Array.isArray(meeting.guests) ? meeting.guests.join(', ') : meeting.guests;
+      descriptionLines.push(`Invitados adicionales: ${guestListStr}`);
+    }
     if (meeting.inviteePhone) descriptionLines.push(`Teléfono: ${meeting.inviteePhone}`);
     if (meeting.inviteeNotes) descriptionLines.push(`Notas: ${meeting.inviteeNotes}`);
     if (meeting.locationUrl) descriptionLines.push(`Enlace de reunión: ${meeting.locationUrl}`);
@@ -1232,6 +1244,15 @@ export function generateSingleIcs(meeting = {}, hostName = 'Anfitrión', hostEma
   const organizerLine = hostEmail ? `ORGANIZER;CN=${hostName}:mailto:${hostEmail}` : `ORGANIZER;CN=${hostName}:mailto:no-reply@reuniones.app`;
   const attendeeLine = meeting.inviteeEmail ? `ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;CN=${meeting.inviteeName || 'Invitado'}:mailto:${meeting.inviteeEmail}` : '';
 
+  const extraAttendeeLines = [];
+  if (meeting.guests) {
+    const rawList = Array.isArray(meeting.guests) ? meeting.guests.join(',') : String(meeting.guests);
+    const extraGuests = rawList.split(/[,;\s]+/).map(g => g.trim()).filter(g => g.includes('@'));
+    for (const eg of extraGuests) {
+      extraAttendeeLines.push(`ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;CN=Invitado:mailto:${eg}`);
+    }
+  }
+
   return [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
@@ -1249,6 +1270,7 @@ export function generateSingleIcs(meeting = {}, hostName = 'Anfitrión', hostEma
     `STATUS:${status}`,
     organizerLine,
     attendeeLine,
+    ...extraAttendeeLines,
     'END:VEVENT',
     'END:VCALENDAR'
   ].filter(Boolean).join('\r\n');
@@ -1305,6 +1327,7 @@ export async function sendWorkflowEmail({ type = 'confirmation', meeting = {}, h
             <div style="font-size: 0.9rem; color: #334155; margin-bottom: 6px;">📅 <strong>Fecha:</strong> ${meetingDateStr}</div>
             <div style="font-size: 0.9rem; color: #334155; margin-bottom: 6px;">⏱️ <strong>Duración:</strong> ${meeting.duration || 30} minutos</div>
             <div style="font-size: 0.9rem; color: #334155; margin-bottom: 6px;">👤 <strong>${isForHost ? 'Invitado' : 'Anfitrión'}:</strong> ${isForHost ? `${meeting.inviteeName || 'Invitado'} (${meeting.inviteeEmail})` : `${hostName} ${hostEmail ? `(${hostEmail})` : ''}`}</div>
+            ${meeting.guests ? `<div style="font-size: 0.9rem; color: #334155; margin-bottom: 6px;">👥 <strong>Otros invitados:</strong> ${Array.isArray(meeting.guests) ? meeting.guests.join(', ') : meeting.guests}</div>` : ''}
             ${meeting.inviteePhone ? `<div style="font-size: 0.9rem; color: #334155; margin-bottom: 6px;">📞 <strong>Teléfono invitado:</strong> ${meeting.inviteePhone}</div>` : ''}
             ${meeting.inviteeNotes ? `<div style="font-size: 0.85rem; color: #64748b; margin-top: 8px;">📝 <strong>Notas:</strong> ${meeting.inviteeNotes}</div>` : ''}
           </div>
@@ -1330,6 +1353,20 @@ export async function sendWorkflowEmail({ type = 'confirmation', meeting = {}, h
   const recipients = [
     { email: meeting.inviteeEmail, isHost: false, subject: `${isConfirmation ? '✓ Confirmado:' : '✕ Cancelado:'} ${meeting.eventTitle || 'Reunión'} con ${hostName}` }
   ];
+
+  if (meeting.guests) {
+    const rawList = Array.isArray(meeting.guests) ? meeting.guests.join(',') : String(meeting.guests);
+    const extraGuests = rawList.split(/[,;\s]+/).map(g => g.trim()).filter(g => g.includes('@'));
+    for (const eg of extraGuests) {
+      if (!recipients.some(r => r.email.toLowerCase() === eg.toLowerCase())) {
+        recipients.push({
+          email: eg,
+          isHost: false,
+          subject: `${isConfirmation ? '✓ Invitación a reunión:' : '✕ Reunión cancelada:'} ${meeting.eventTitle || 'Reunión'} con ${hostName}`
+        });
+      }
+    }
+  }
 
   if (hostEmail && hostEmail.includes('@') && hostEmail.toLowerCase() !== meeting.inviteeEmail.toLowerCase()) {
     recipients.push({

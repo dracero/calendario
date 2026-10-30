@@ -1304,6 +1304,13 @@
     document.getElementById('booking-step-calendar').style.display = 'none';
     document.getElementById('booking-step-form').style.display = 'block';
 
+    const box = document.getElementById('modal-guests-box');
+    const btn = document.getElementById('btn-modal-toggle-guests');
+    const input = document.getElementById('invitee-guests');
+    if (box) box.style.display = 'none';
+    if (btn) btn.style.display = 'inline-block';
+    if (input) input.value = '';
+
     const days = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
     const months = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
     const dateFormatted = `${days[state.selectedDate.getDay()]}, ${state.selectedDate.getDate()} de ${months[state.selectedDate.getMonth()]} de ${state.selectedDate.getFullYear()}`;
@@ -1396,6 +1403,19 @@
   }
 
   // --- Invitee Booking Form Submission ---
+  const btnModalToggleGuests = document.getElementById('btn-modal-toggle-guests');
+  if (btnModalToggleGuests) {
+    btnModalToggleGuests.addEventListener('click', () => {
+      const box = document.getElementById('modal-guests-box');
+      if (box) {
+        box.style.display = 'block';
+        btnModalToggleGuests.style.display = 'none';
+        const input = document.getElementById('invitee-guests');
+        if (input) input.focus();
+      }
+    });
+  }
+
   const bookingForm = document.getElementById('form-invitee-booking');
   if (bookingForm) {
     bookingForm.addEventListener('submit', async (e) => {
@@ -1405,6 +1425,8 @@
       const email = document.getElementById('invitee-email').value.trim();
       const phone = document.getElementById('invitee-phone').value.trim();
       const notes = document.getElementById('invitee-notes').value.trim();
+      const guestsInput = document.getElementById('invitee-guests');
+      const guests = guestsInput ? guestsInput.value.trim() : '';
 
       const y = state.selectedDate.getFullYear();
       const m = String(state.selectedDate.getMonth() + 1).padStart(2, '0');
@@ -1424,6 +1446,7 @@
         inviteeEmail: email,
         inviteePhone: phone,
         inviteeNotes: notes,
+        guests: guests,
         dateTime: dateTimeIso,
         timeZone: resolvedTz,
         status: 'upcoming'
@@ -2682,6 +2705,13 @@
     if (stepCal) stepCal.style.display = 'none';
     if (stepForm) stepForm.style.display = 'flex';
 
+    const boxG = document.getElementById('pub-guests-box');
+    const btnG = document.getElementById('btn-pub-toggle-guests');
+    const inputG = document.getElementById('pub-invitee-guests');
+    if (boxG) boxG.style.display = 'none';
+    if (btnG) btnG.style.display = 'inline-block';
+    if (inputG) inputG.value = '';
+
     const days = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
     const months = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
     const dateFormatted = `${timeStr}, ${days[state.selectedDate.getDay()]}, ${state.selectedDate.getDate()} de ${months[state.selectedDate.getMonth()]} de ${state.selectedDate.getFullYear()}`;
@@ -2729,8 +2759,10 @@
     btnToggleGuests.addEventListener('click', () => {
       const box = document.getElementById('pub-guests-box');
       if (box) {
-        box.style.display = box.style.display === 'none' ? 'block' : 'none';
+        box.style.display = 'block';
         btnToggleGuests.style.display = 'none';
+        const input = document.getElementById('pub-invitee-guests');
+        if (input) input.focus();
       }
     });
   }
@@ -2777,6 +2809,8 @@
         const email = document.getElementById('pub-invitee-email').value.trim();
         const phone = document.getElementById('pub-invitee-phone').value.trim();
         const notes = document.getElementById('pub-invitee-notes').value.trim();
+        const guestsInput = document.getElementById('pub-invitee-guests');
+        const guests = guestsInput ? guestsInput.value.trim() : '';
 
         const y = state.selectedDate.getFullYear();
         const m = String(state.selectedDate.getMonth() + 1).padStart(2, '0');
@@ -2796,6 +2830,7 @@
           inviteeEmail: email,
           inviteePhone: phone,
           inviteeNotes: notes,
+          guests: guests,
           dateTime: dateTimeIso,
           timeZone: resolvedTz,
           status: 'upcoming'
