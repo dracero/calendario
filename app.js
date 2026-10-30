@@ -139,6 +139,59 @@
     { day: 'Domingo', active: false, start: '10:00', end: '14:00' }
   ];
 
+  const DEFAULT_WORKFLOWS = [
+    {
+      id: 'wf-confirmation-email',
+      name: 'Confirmación inmediata por Email',
+      description: 'Envía automáticamente un correo al invitado y anfitrión con el enlace de reunión y archivo de calendario .ics adjunto.',
+      trigger: 'booking_created',
+      triggerLabel: 'Disparador: Tras reservar',
+      channel: 'Email',
+      accentColor: 'var(--primary)',
+      active: true
+    },
+    {
+      id: 'wf-cancellation-email',
+      name: 'Notificación de Cancelación por Email',
+      description: 'Notifica inmediatamente al invitado y anfitrión cuando una reunión se cancela o elimina, liberando el horario en la agenda y cancelando la videollamada.',
+      trigger: 'booking_canceled',
+      triggerLabel: 'Disparador: Al cancelar o borrar',
+      channel: 'Email',
+      accentColor: 'var(--accent-rose, #e11d48)',
+      active: true
+    },
+    {
+      id: 'wf-reminder-24h',
+      name: 'Recordatorio por Email 24h antes',
+      description: 'Reduce los no-shows recordando la cita al invitado con 24 horas de antelación con botón para reprogramar si es necesario.',
+      trigger: 'reminder_24h',
+      triggerLabel: 'Disparador: 24h antes',
+      channel: 'Email',
+      accentColor: 'var(--accent-emerald)',
+      active: true
+    },
+    {
+      id: 'wf-reminder-1h-sms',
+      name: 'Recordatorio por SMS / WhatsApp 1h antes',
+      description: 'Mensaje instantáneo al teléfono móvil del asistente con el link directo a la sala de videollamada.',
+      trigger: 'reminder_1h',
+      triggerLabel: 'Disparador: 1h antes',
+      channel: 'SMS / WhatsApp',
+      accentColor: 'var(--accent-amber)',
+      active: true
+    },
+    {
+      id: 'wf-followup-survey',
+      name: 'Email de Seguimiento y Encuesta',
+      description: 'Envía notas de la sesión, recursos mencionados y una breve encuesta de satisfacción al terminar la cita.',
+      trigger: 'post_meeting',
+      triggerLabel: 'Disparador: 1h post-cita',
+      channel: 'Email',
+      accentColor: 'var(--accent-purple)',
+      active: false
+    }
+  ];
+
   // --- State Management ---
   const state = {
     eventTypes: [],
@@ -148,7 +201,7 @@
     currentFilter: 'all',
     searchQuery: '',
     viewMode: 'grid', // 'grid' | 'list'
-    activeAppView: 'event-types',
+    activeAppView: 'login',
     scheduledFilter: 'upcoming',
     // Booking flow state
     bookingEvent: null,
@@ -157,37 +210,67 @@
     selectedSlot: null,
     // Active Share Event
     shareEvent: null,
+    // Workflows and Automation Logs
+    workflows: JSON.parse(JSON.stringify(DEFAULT_WORKFLOWS)),
+    workflowLogs: [],
     // Google Calendar Sync State
     googleCalendar: {
       connected: false,
       calendarName: null,
+      hostPublicName: null,
       lastSync: null,
       autoBlock: true,
       icalUrl: '',
       events: [],
       isDemo: false
     },
+    // Public Host State (when viewing another person's public booking link)
+    publicHost: {
+      connected: false,
+      hostPublicName: null,
+      hostSlug: null,
+      autoBlock: true,
+      events: [],
+      scheduledMeetings: []
+    },
     // Authentication State (Google OAuth / Calendly Clone)
     auth: {
       authenticated: false,
+      checked: false,
       user: null,
+      publicHostToken: null,
       googleConfigured: false,
       googleClientId: null
     }
   };
 
-  function loadState() {
+  function getCurrentUserStorageKey() {
+    if (state.auth && state.auth.authenticated && state.auth.user) {
+      const raw = (state.auth.user.email || state.auth.user.id || '').toLowerCase().trim();
+      if (raw) return raw.replace(/[^a-z0-9@._-]/g, '_');
+    }
+    return 'anonymous';
+  }
+
+  function loadState(customUserKey) {
     try {
-      const storedEvents = localStorage.getItem('reuniones_event_types');
-      state.eventTypes = storedEvents ? JSON.parse(storedEvents) : DEFAULT_EVENT_TYPES;
+      const userKey = customUserKey || getCurrentUserStorageKey();
+      const storedEvents = localStorage.getItem(`reuniones_event_types_${userKey}`);
+      state.eventTypes = storedEvents ? JSON.parse(storedEvents) : JSON.parse(JSON.stringify(DEFAULT_EVENT_TYPES));
 
-      const storedMeetings = localStorage.getItem('reuniones_scheduled');
-      state.scheduledMeetings = storedMeetings ? JSON.parse(storedMeetings) : DEFAULT_SCHEDULED_MEETINGS;
+      const storedMeetings = localStorage.getItem(`reuniones_scheduled_${userKey}`);
+      state.scheduledMeetings = storedMeetings ? JSON.parse(storedMeetings) : JSON.parse(JSON.stringify(DEFAULT_SCHEDULED_MEETINGS));
 
-      const storedSchedule = localStorage.getItem('reuniones_weekly_schedule');
-      state.weeklySchedule = storedSchedule ? JSON.parse(storedSchedule) : DEFAULT_WEEKLY_SCHEDULE;
+      const storedSchedule = localStorage.getItem(`reuniones_weekly_schedule_${userKey}`);
+      state.weeklySchedule = storedSchedule ? JSON.parse(storedSchedule) : JSON.parse(JSON.stringify(DEFAULT_WEEKLY_SCHEDULE));
 
-      const storedTz = localStorage.getItem('reuniones_timezone');
+      const storedWorkflows = localStorage.getItem(`reuniones_workflows_${userKey}`);
+      state.workflows = storedWorkflows ? JSON.parse(storedWorkflows) : JSON.parse(JSON.stringify(DEFAULT_WORKFLOWS));
+
+      const storedLogs = localStorage.getItem(`reuniones_workflow_logs_${userKey}`);
+      state.workflowLogs = storedLogs ? JSON.parse(storedLogs) : [];
+
+      const storedTz = localStorage.getItem(`reuniones_timezone_${userKey}`) || localStorage.getItem('reuniones_timezone');
       if (storedTz) state.timezone = storedTz;
 
       const storedTheme = localStorage.getItem('reuniones_theme');
@@ -196,21 +279,73 @@
       }
     } catch (e) {
       console.warn('Error reading from localStorage, using defaults:', e);
-      state.eventTypes = DEFAULT_EVENT_TYPES;
-      state.scheduledMeetings = DEFAULT_SCHEDULED_MEETINGS;
-      state.weeklySchedule = DEFAULT_WEEKLY_SCHEDULE;
+      state.eventTypes = JSON.parse(JSON.stringify(DEFAULT_EVENT_TYPES));
+      state.scheduledMeetings = JSON.parse(JSON.stringify(DEFAULT_SCHEDULED_MEETINGS));
+      state.weeklySchedule = JSON.parse(JSON.stringify(DEFAULT_WEEKLY_SCHEDULE));
+      state.workflows = JSON.parse(JSON.stringify(DEFAULT_WORKFLOWS));
+      state.workflowLogs = [];
     }
   }
 
   function saveState() {
     try {
-      localStorage.setItem('reuniones_event_types', JSON.stringify(state.eventTypes));
-      localStorage.setItem('reuniones_scheduled', JSON.stringify(state.scheduledMeetings));
-      localStorage.setItem('reuniones_weekly_schedule', JSON.stringify(state.weeklySchedule));
-      localStorage.setItem('reuniones_timezone', state.timezone);
+      const userKey = getCurrentUserStorageKey();
+      localStorage.setItem(`reuniones_event_types_${userKey}`, JSON.stringify(state.eventTypes));
+      localStorage.setItem(`reuniones_scheduled_${userKey}`, JSON.stringify(state.scheduledMeetings));
+      localStorage.setItem(`reuniones_weekly_schedule_${userKey}`, JSON.stringify(state.weeklySchedule));
+      localStorage.setItem(`reuniones_workflows_${userKey}`, JSON.stringify(state.workflows));
+      localStorage.setItem(`reuniones_workflow_logs_${userKey}`, JSON.stringify(state.workflowLogs));
+      localStorage.setItem(`reuniones_timezone_${userKey}`, state.timezone);
     } catch (e) {
       console.error('Failed to save to localStorage:', e);
     }
+  }
+
+  function loadUserLocalCalendarMeta(userKey) {
+    if (!userKey || userKey === 'anonymous') return null;
+    try {
+      const raw = localStorage.getItem(`reuniones_gcal_user_${userKey}`);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function saveUserLocalCalendarMeta(meta) {
+    const userKey = getCurrentUserStorageKey();
+    if (!userKey || userKey === 'anonymous') return;
+    try {
+      localStorage.setItem(`reuniones_gcal_user_${userKey}`, JSON.stringify(meta));
+    } catch (e) {
+      console.warn('Failed to save user calendar metadata:', e);
+    }
+  }
+
+  function clearUserLocalCalendarMeta() {
+    const userKey = getCurrentUserStorageKey();
+    if (!userKey || userKey === 'anonymous') return;
+    try {
+      localStorage.removeItem(`reuniones_gcal_user_${userKey}`);
+    } catch (e) {
+      console.warn('Failed to clear user calendar metadata:', e);
+    }
+  }
+
+  function resetCalendarStateInMemory() {
+    state.googleCalendar = {
+      connected: false,
+      calendarName: null,
+      hostPublicName: null,
+      lastSync: null,
+      autoBlock: true,
+      icalUrl: '',
+      events: [],
+      eventCount: 0,
+      isDemo: false,
+      syncMode: null
+    };
+    const urlInput = document.getElementById('input-gcal-ical-url');
+    if (urlInput) urlInput.value = '';
   }
 
   // --- Toast Notifications ---
@@ -249,19 +384,98 @@
     }
   }
 
-  // --- Dynamic Host Information based on Google Auth or Calendar Name ---
+  // --- Dynamic Host Information based on Per-Browser Session Auth ---
+  function sanitizePublicBrandName(name) {
+    if (!name || typeof name !== 'string') return '';
+    return name.replace(/calendly/gi, 'Reuniones').trim();
+  }
+
+  function humanizeSlug(slug) {
+    if (!slug || typeof slug !== 'string') return '';
+    return slug
+      .replace(/[-_]+/g, ' ')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+  }
+
+  function getPublicRouteContext() {
+    const hash = window.location.hash || '';
+    const path = window.location.pathname || '';
+    const searchParams = new URLSearchParams(window.location.search);
+
+    let hashPath = hash.startsWith('#') ? hash.substring(1) : hash;
+    let hashQuery = '';
+    const qIdx = hashPath.indexOf('?');
+    if (qIdx !== -1) {
+      hashQuery = hashPath.substring(qIdx + 1);
+      hashPath = hashPath.substring(0, qIdx);
+    }
+    const hashParams = new URLSearchParams(hashQuery);
+
+    const hostToken = hashParams.get('ht') || searchParams.get('ht') || '';
+    let hostSlug = hashParams.get('host') || searchParams.get('host') || '';
+    let eventSlug = '';
+
+    if (hashPath.startsWith('/user/')) {
+      hostSlug = decodeURIComponent(hashPath.replace('/user/', '').split('/')[0] || '');
+    } else if (path.startsWith('/user/')) {
+      hostSlug = decodeURIComponent(path.replace('/user/', '').split('/')[0] || '');
+    } else if (hashPath.startsWith('/book/')) {
+      const rest = hashPath.replace('/book/', '').split('/').filter(Boolean);
+      if (rest.length >= 2) {
+        hostSlug = decodeURIComponent(rest[0]);
+        eventSlug = decodeURIComponent(rest[1]);
+      } else if (rest.length === 1) {
+        eventSlug = decodeURIComponent(rest[0]);
+      }
+    } else if (path.startsWith('/book/')) {
+      const rest = path.replace('/book/', '').split('/').filter(Boolean);
+      if (rest.length >= 2) {
+        hostSlug = decodeURIComponent(rest[0]);
+        eventSlug = decodeURIComponent(rest[1]);
+      } else if (rest.length === 1) {
+        eventSlug = decodeURIComponent(rest[0]);
+      }
+    }
+
+    return {
+      hostSlug: hostSlug.trim(),
+      eventSlug: eventSlug.trim(),
+      hostToken: hostToken.trim()
+    };
+  }
+
   function getHostName() {
     if (state.auth && state.auth.authenticated && state.auth.user && state.auth.user.name) {
-      return state.auth.user.name.trim();
+      return sanitizePublicBrandName(state.auth.user.name) || 'Agenda de Reuniones';
     }
-    if (state.googleCalendar && state.googleCalendar.calendarName && state.googleCalendar.calendarName.trim()) {
-      return state.googleCalendar.calendarName.trim();
+    if (state.googleCalendar && state.googleCalendar.hostPublicName && state.googleCalendar.hostPublicName.trim()) {
+      return sanitizePublicBrandName(state.googleCalendar.hostPublicName) || 'Agenda de Reuniones';
     }
-    return 'Alex Calendly';
+    return 'Agenda de Reuniones';
+  }
+
+  function getPublicHostName() {
+    const ctx = getPublicRouteContext();
+    const mySlug = state.auth && state.auth.authenticated && state.auth.user
+      ? getHostSlug(state.auth.user.name)
+      : '';
+
+    // If viewing another person's public page, show the public host's name instead of the visitor's own name
+    if (state.publicHost && state.publicHost.hostPublicName) {
+      return sanitizePublicBrandName(state.publicHost.hostPublicName);
+    }
+    if (ctx.hostSlug && ctx.hostSlug !== mySlug) {
+      return sanitizePublicBrandName(humanizeSlug(ctx.hostSlug)) || 'Agenda de Reuniones';
+    }
+    return getHostName();
   }
 
   function getInitials(name) {
-    if (!name) return 'AC';
+    if (!name) return 'AR';
     const parts = name.trim().split(/\s+/).filter(Boolean);
     if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
     return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
@@ -273,6 +487,23 @@
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'calendario';
+  }
+
+  function buildPublicUserUrl(customSlug) {
+    const slug = customSlug || getHostSlug();
+    const ht = state.auth?.publicHostToken || '';
+    const query = ht ? `?ht=${encodeURIComponent(ht)}` : '';
+    return `${window.location.origin}/#/user/${slug}${query}`;
+  }
+
+  function buildPublicBookUrl(eventSlug, customHostSlug) {
+    const hostSlug = customHostSlug || getHostSlug();
+    const ht = state.auth?.publicHostToken || '';
+    const params = new URLSearchParams();
+    if (hostSlug) params.set('host', hostSlug);
+    if (ht) params.set('ht', ht);
+    const qs = params.toString();
+    return `${window.location.origin}/#/book/${eventSlug}${qs ? '?' + qs : ''}`;
   }
 
   function renderAvatarElement(el, initials, picture, name) {
@@ -308,9 +539,13 @@
     if (dropBadge) {
       if (state.auth && state.auth.authenticated) {
         dropBadge.style.display = 'inline-flex';
-        dropBadge.innerHTML = state.auth.user?.isDemo
-          ? '<span>⚡ Demo Google</span>'
-          : '<svg width="12" height="12" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg> Google OAuth';
+        if (state.auth.user?.isDemo) {
+          dropBadge.innerHTML = '<span>⚡ Demo Google</span>';
+        } else if (state.auth.user?.provider === 'email') {
+          dropBadge.innerHTML = '<span>✉️ Cuenta registrada</span>';
+        } else {
+          dropBadge.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg> Google OAuth';
+        }
       } else {
         dropBadge.style.display = 'none';
       }
@@ -324,14 +559,19 @@
     if (mainName) mainName.textContent = hostName;
     if (mainSlug) mainSlug.textContent = `reuniones.io/${slug}`;
 
-    // 4. Public Profile Card
+    // 4. Public Profile Card (uses public host name when viewing another person's link)
+    const pubHostName = getPublicHostName();
+    const pubInitials = getInitials(pubHostName);
+    const isViewingOwnPublic = !isPublicRoute() || (slug === getHostSlug(pubHostName));
+    const pubPicture = isViewingOwnPublic ? picture : null;
+
     const pubAvatar = document.getElementById('public-avatar-circle');
     const pubName = document.getElementById('public-profile-name');
     const pubBio = document.getElementById('public-profile-bio');
-    renderAvatarElement(pubAvatar, initials, picture, hostName);
-    if (pubName) pubName.textContent = hostName;
+    renderAvatarElement(pubAvatar, pubInitials, pubPicture, pubHostName);
+    if (pubName) pubName.textContent = pubHostName;
     if (pubBio) {
-      pubBio.textContent = `Bienvenido a la página de programación de ${hostName}. Selecciona una de las sesiones disponibles a continuación para agendar un espacio en mi calendario.`;
+      pubBio.textContent = `Bienvenido a la página de programación de ${pubHostName}. Selecciona una de las sesiones disponibles a continuación para agendar un espacio en el calendario.`;
     }
 
     // 5. Modal Booking Host
@@ -389,22 +629,58 @@
     }
   }
 
-  // --- Google Authentication System (Calendly Clone) ---
+  // --- Google Authentication System (Calendly Clone - Per-Browser Session Strategy) ---
+  function isPublicRoute() {
+    const hash = window.location.hash || '';
+    const path = window.location.pathname || '';
+    return (
+      hash === '#public' ||
+      hash.startsWith('#/user') ||
+      hash.startsWith('#/book/') ||
+      path === '/public' ||
+      path.startsWith('/user/') ||
+      path.startsWith('/book/')
+    );
+  }
+
   async function checkAuthStatus() {
+    const prevUserKey = getCurrentUserStorageKey();
     try {
-      const res = await fetch('/api/auth/me');
+      const res = await fetch('/api/auth/me', {
+        method: 'GET',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' }
+      });
       if (res.ok) {
         const data = await res.json();
         state.auth.authenticated = !!data.authenticated;
+        state.auth.checked = true;
         state.auth.user = data.user || null;
+        state.auth.publicHostToken = data.publicHostToken || null;
         state.auth.googleConfigured = !!data.googleConfigured;
         state.auth.googleClientId = data.googleClientId || null;
+
+        const nextUserKey = getCurrentUserStorageKey();
+        if (nextUserKey !== prevUserKey) {
+          resetCalendarStateInMemory();
+          loadState(nextUserKey);
+          renderEventTypes();
+          renderScheduledMeetings();
+          renderWeeklySchedule();
+        }
         updateHostProfileUI();
         return data;
       }
     } catch (e) {
       console.warn('Could not check auth status:', e);
     }
+    state.auth.authenticated = false;
+    state.auth.checked = true;
+    state.auth.user = null;
+    state.auth.publicHostToken = null;
+    resetCalendarStateInMemory();
+    updateHostProfileUI();
     return null;
   }
 
@@ -422,36 +698,73 @@
     try {
       const res = await fetch('/api/auth/demo-login', {
         method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: 'Alex Calendly',
+          name: 'Alex Reuniones',
           email: 'alex.usuario@gmail.com'
         })
       });
       const data = await res.json();
       if (data.success) {
-        showToast('¡Sesión iniciada con Cuenta Google!', '✓');
+        showToast('¡Sesión iniciada en este navegador!', '✓');
         await checkAuthStatus();
-        fetchCalendarStatus();
+        await fetchCalendarStatus();
+        window.location.hash = '#meeting_types';
         switchView('event-types');
-        window.location.hash = '';
       }
     } catch (err) {
       showToast('Error al iniciar demo: ' + err.message, '⚠️');
     }
   }
 
+  async function loginOrRegisterByEmail(email, name, isSignup = false) {
+    try {
+      const endpoint = isSignup ? '/api/auth/register' : '/api/auth/email-login';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, name })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        showToast(data.error || 'Error al iniciar sesión', '⚠️');
+        return false;
+      }
+      resetCalendarStateInMemory();
+      await checkAuthStatus();
+      await fetchCalendarStatus();
+      showToast(`¡Bienvenido, ${data.user?.name || email}! Tu cuenta y calendario son independientes.`, '🎉');
+      window.location.hash = '#meeting_types';
+      switchView('event-types');
+      return true;
+    } catch (err) {
+      showToast('Error de red al autenticar: ' + err.message, '⚠️');
+      return false;
+    }
+  }
+
   async function logoutUser() {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store'
+      });
       state.auth.authenticated = false;
       state.auth.user = null;
+      resetCalendarStateInMemory();
+      loadState('anonymous');
+      updateGoogleCalendarUI();
       updateHostProfileUI();
-      showToast('Has cerrado sesión correctamente', '✓');
+      showToast('Has cerrado sesión en este navegador', '✓');
       const dropdown = document.getElementById('user-profile-dropdown');
       if (dropdown) dropdown.classList.remove('show');
-      switchView('login');
       window.location.hash = '#login';
+      switchView('login');
     } catch (err) {
       showToast('Error al cerrar sesión', '⚠️');
     }
@@ -512,7 +825,7 @@
     }
 
     container.innerHTML = filtered.map(ev => {
-      const publicUrl = `${window.location.origin}/#/book/${ev.slug}`;
+      const publicUrl = buildPublicBookUrl(ev.slug);
       const locationIcon = getLocationIconSvg(ev.location);
 
       return `
@@ -579,7 +892,7 @@
 
           <div class="card-footer">
             <div class="card-footer-left">
-              <button class="btn-copy-link" onclick="window.ReunionesApp.copyEventLink('${publicUrl}', this)">
+              <button class="btn-copy-link" onclick="window.ReunionesApp.copyEventLink('${ev.slug}', this)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                 Copiar enlace
               </button>
@@ -675,13 +988,16 @@
               <a href="${m.locationUrl}" target="_blank" rel="noopener noreferrer" class="btn-primary" style="padding: 7px 14px; font-size: 0.8125rem;">
                 Unirse a videollamada
               </a>
-              <button class="btn-secondary" style="padding: 7px 12px; font-size: 0.8125rem;" onclick="window.ReunionesApp.cancelMeeting('${m.id}')">
+              <button class="btn-secondary" style="padding: 7px 12px; font-size: 0.8125rem;" onclick="window.ReunionesApp.cancelMeeting('${m.id}')" title="Cancelar reunión y disparar flujo de notificación">
                 Cancelar
               </button>
             ` : `
               <span style="font-size: 0.8125rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">
                 ${m.status === 'past' ? 'Completada' : 'Cancelada'}
               </span>
+              <button class="btn-secondary" style="padding: 7px 12px; font-size: 0.8125rem; color: var(--accent-rose, #e11d48);" onclick="window.ReunionesApp.deleteMeeting('${m.id}')" title="Eliminar reunión definitivamente y disparar flujo">
+                Eliminar
+              </button>
             `}
           </div>
         </div>
@@ -995,10 +1311,94 @@
     document.getElementById('form-summary-datetime').textContent = `📅 ${dateFormatted} a las ${timeStr} (${state.bookingEvent.duration} min)`;
   }
 
+  function buildLocalDateTimeWithOffset(dateObj, timeStr) {
+    const y = dateObj.getFullYear();
+    const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const d = String(dateObj.getDate()).padStart(2, '0');
+    const [hh = '09', mm = '00'] = String(timeStr || '09:00').split(':');
+    const exactLocal = new Date(y, dateObj.getMonth(), dateObj.getDate(), Number(hh), Number(mm), 0);
+    const tzOffsetMin = -exactLocal.getTimezoneOffset();
+    const sign = tzOffsetMin >= 0 ? '+' : '-';
+    const absMin = Math.abs(tzOffsetMin);
+    const offH = String(Math.floor(absMin / 60)).padStart(2, '0');
+    const offM = String(absMin % 60).padStart(2, '0');
+    return `${y}-${m}-${d}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00${sign}${offH}:${offM}`;
+  }
+
+  async function submitBookingToServer(newMeeting) {
+    const ctx = getPublicRouteContext();
+    const pubHostName = getPublicHostName();
+    const targetSlug = ctx.hostSlug || getHostSlug(pubHostName);
+    const targetToken = ctx.hostToken || state.auth.publicHostToken || '';
+
+    try {
+      const res = await fetch('/api/calendar/book', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meeting: newMeeting,
+          hostSlug: targetSlug,
+          hostToken: targetToken,
+          hostName: pubHostName
+        })
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data && data.success) {
+        if (data.meeting) {
+          Object.assign(newMeeting, data.meeting);
+        }
+        // Immediately block the slot in publicHost memory so it shows as Ocupado
+        state.publicHost.scheduledMeetings = Array.isArray(state.publicHost.scheduledMeetings)
+          ? [newMeeting, ...state.publicHost.scheduledMeetings.filter(m => m.id !== newMeeting.id)]
+          : [newMeeting];
+        const startObj = new Date(newMeeting.dateTime);
+        const endObj = new Date(startObj.getTime() + (Number(newMeeting.duration) || 30) * 60000);
+        const calEv = {
+          id: newMeeting.id,
+          summary: `${newMeeting.eventTitle || 'Reunión'} con ${newMeeting.inviteeName || 'Invitado'}`,
+          start: startObj.toISOString(),
+          end: endObj.toISOString(),
+          location: newMeeting.locationUrl || newMeeting.location || 'Google Meet',
+          status: 'CONFIRMED'
+        };
+        state.publicHost.events = Array.isArray(state.publicHost.events)
+          ? [...state.publicHost.events.filter(ev => ev.id !== calEv.id), calEv]
+          : [calEv];
+
+        // Also update the in-app calendar state if logged in
+        if (state.auth && state.auth.authenticated) {
+          state.googleCalendar.connected = true;
+          if (!state.googleCalendar.calendarName && state.auth.user) {
+            state.googleCalendar.calendarName = `${state.auth.user.name} (${state.auth.user.email})`;
+          }
+          state.googleCalendar.events = Array.isArray(state.googleCalendar.events)
+            ? [calEv, ...state.googleCalendar.events.filter(ev => ev.id !== calEv.id)]
+            : [calEv];
+          state.googleCalendar.eventCount = state.googleCalendar.events.length;
+          state.googleCalendar.lastSync = new Date().toISOString();
+          saveUserLocalCalendarMeta({
+            userKey: getCurrentUserStorageKey(),
+            ...state.googleCalendar
+          });
+          updateGoogleCalendarUI();
+          // Refresh live status from server & Google Calendar API in background
+          fetchCalendarStatus();
+        }
+        return data;
+      }
+    } catch (e) {
+      console.warn('Error booking meeting on server:', e);
+    }
+    return null;
+  }
+
   // --- Invitee Booking Form Submission ---
   const bookingForm = document.getElementById('form-invitee-booking');
   if (bookingForm) {
-    bookingForm.addEventListener('submit', (e) => {
+    bookingForm.addEventListener('submit', async (e) => {
       e.preventDefault();
 
       const name = document.getElementById('invitee-name').value.trim();
@@ -1009,7 +1409,8 @@
       const y = state.selectedDate.getFullYear();
       const m = String(state.selectedDate.getMonth() + 1).padStart(2, '0');
       const d = String(state.selectedDate.getDate()).padStart(2, '0');
-      const dateTimeIso = `${y}-${m}-${d}T${state.selectedSlot}:00`;
+      const dateTimeIso = buildLocalDateTimeWithOffset(state.selectedDate, state.selectedSlot);
+      const resolvedTz = (Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions().timeZone) || 'America/Santiago';
 
       const newMeeting = {
         id: 'meet-' + Date.now(),
@@ -1024,11 +1425,19 @@
         inviteePhone: phone,
         inviteeNotes: notes,
         dateTime: dateTimeIso,
+        timeZone: resolvedTz,
         status: 'upcoming'
       };
 
-      state.scheduledMeetings.unshift(newMeeting);
+      const bookResult = await submitBookingToServer(newMeeting);
+
+      if (!state.scheduledMeetings.some(item => item.id === newMeeting.id)) {
+        state.scheduledMeetings.unshift(newMeeting);
+      }
       saveState();
+
+      // Trigger active Workflows for new booking
+      await triggerWorkflows('booking_created', newMeeting);
 
       // Show Step 3 (Confirmation)
       document.getElementById('booking-step-form').style.display = 'none';
@@ -1037,30 +1446,37 @@
       document.getElementById('success-invitee-email').textContent = email;
       document.getElementById('success-event-title').textContent = state.bookingEvent.name;
       document.getElementById('success-datetime').textContent = `${y}-${m}-${d} a las ${state.selectedSlot}`;
-      document.getElementById('success-location').textContent = `${state.bookingEvent.location} (Enlace incluido en correo)`;
-
-      // Setup Calendar links (Google, Outlook, ICS)
-      const startObj = new Date(dateTimeIso);
-      const endObj = new Date(startObj.getTime() + state.bookingEvent.duration * 60000);
-      const pad = (n) => String(n).padStart(2, '0');
-      const gDate = (d) => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`;
-
-      const hostName = getHostName();
-      const gCalUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(newMeeting.eventTitle + ' con ' + hostName)}&dates=${gDate(startObj)}/${gDate(endObj)}&details=${encodeURIComponent(newMeeting.inviteeNotes || 'Reunión programada')}&location=${encodeURIComponent(newMeeting.locationUrl || newMeeting.location)}`;
-      const outCalUrl = `https://outlook.live.com/calendar/0/deeplink/compose?path=/calendar/action/compose&rru=addevent&subject=${encodeURIComponent(newMeeting.eventTitle + ' con ' + hostName)}&startdt=${startObj.toISOString()}&enddt=${endObj.toISOString()}&body=${encodeURIComponent(newMeeting.inviteeNotes || 'Reunión programada')}&location=${encodeURIComponent(newMeeting.locationUrl || newMeeting.location)}`;
+      document.getElementById('success-location').textContent = `${state.bookingEvent.location} (${newMeeting.locationUrl})`;
 
       const btnG = document.getElementById('btn-add-google-cal');
-      const btnO = document.getElementById('btn-add-outlook-cal');
-      if (btnG) btnG.href = gCalUrl;
-      if (btnO) btnO.href = outCalUrl;
+      if (btnG) {
+        btnG.textContent = (bookResult && bookResult.googleEventCreated)
+          ? '✓ Sincronizado en Google Calendar desde la app'
+          : '✓ Guardado en el calendario de la aplicación';
+        if (bookResult && !bookResult.googleEventCreated && bookResult.warning) {
+          showToast('No se pudo crear en Google Calendar: ' + bookResult.warning, '⚠️');
+          console.warn('Google Calendar API error:', bookResult.warning);
+        }
+        btnG.onclick = async (ev) => {
+          ev.preventDefault();
+          btnG.disabled = true;
+          btnG.textContent = '⏳ Sincronizando en la aplicación...';
+          await submitBookingToServer(newMeeting);
+          btnG.disabled = false;
+          btnG.textContent = '✓ Sincronizado en el calendario desde la app';
+          showToast('¡Reunión guardada y sincronizada directamente desde la aplicación!', '✓');
+        };
+      }
 
       // Setup ICS download
-      document.getElementById('btn-download-ics').onclick = () => downloadIcsFile(newMeeting);
+      const btnIcsModal = document.getElementById('btn-download-ics');
+      if (btnIcsModal) {
+        btnIcsModal.onclick = () => downloadIcsFile(newMeeting);
+      }
 
       // Refresh listings
       renderScheduledMeetings();
-      syncMeetingsToServer();
-      showToast('¡Reunión programada con éxito!', '🎉');
+      showToast('¡Reunión agendada directamente en el calendario desde la aplicación!', '🎉');
     });
   }
 
@@ -1335,10 +1751,11 @@
     if (!ev) return;
 
     state.shareEvent = ev;
-    const permUrl = `${window.location.origin}/#/book/${ev.slug}`;
+    const permUrl = buildPublicBookUrl(ev.slug);
+    const sep = permUrl.includes('?') ? '&' : '?';
 
     document.getElementById('share-link-input').value = permUrl;
-    document.getElementById('single-use-link-input').value = `${permUrl}?single_use=token_${Math.random().toString(36).substring(2, 9)}`;
+    document.getElementById('single-use-link-input').value = `${permUrl}${sep}single_use=token_${Math.random().toString(36).substring(2, 9)}`;
 
     // Embed code
     const embedCode = `<!-- Widget de reserva de Reuniones -->\n<div class="reuniones-inline-widget" data-url="${permUrl}" style="min-width:320px;height:700px;"></div>\n<script type="text/javascript" src="${window.location.origin}/widget.js" async><\/script>`;
@@ -1370,9 +1787,10 @@
   });
 
   document.getElementById('btn-generate-new-single-use').addEventListener('click', () => {
-    const permUrl = `${window.location.origin}/#/book/${state.shareEvent.slug}`;
+    const permUrl = buildPublicBookUrl(state.shareEvent.slug);
+    const sep = permUrl.includes('?') ? '&' : '?';
     const token = 'token_' + Math.random().toString(36).substring(2, 9);
-    document.getElementById('single-use-link-input').value = `${permUrl}?single_use=${token}`;
+    document.getElementById('single-use-link-input').value = `${permUrl}${sep}single_use=${token}`;
     showToast('Nuevo token de un solo uso generado');
   });
 
@@ -1390,9 +1808,12 @@
     if (menu) menu.classList.toggle('show');
   }
 
-  // Copy Event Link from Card Button
-  function copyEventLink(url, btnEl) {
-    copyToClipboard(url);
+  // Copy Event Link from Card Button (always generates fresh URL with current host & ht token)
+  function copyEventLink(slugOrUrl, btnEl) {
+    const targetUrl = (slugOrUrl && !String(slugOrUrl).startsWith('http'))
+      ? buildPublicBookUrl(slugOrUrl)
+      : slugOrUrl;
+    copyToClipboard(targetUrl);
     if (btnEl) {
       const origHtml = btnEl.innerHTML;
       btnEl.innerHTML = `✓ ¡Copiado!`;
@@ -1417,6 +1838,12 @@
   });
 
   function switchView(viewKey) {
+    // Route Guard: Unauthenticated browsers can ONLY access 'login' or 'public-landing'
+    const adminViews = ['event-types', 'scheduled-events', 'availability', 'workflows'];
+    if (adminViews.includes(viewKey) && state.auth.checked && !state.auth.authenticated) {
+      viewKey = 'login';
+    }
+
     document.querySelectorAll('.nav-tab-btn').forEach(b => {
       b.classList.toggle('active', b.getAttribute('data-view') === viewKey);
     });
@@ -1434,12 +1861,20 @@
 
     state.activeAppView = viewKey;
     document.body.classList.toggle('auth-view', viewKey === 'login');
+    document.body.classList.toggle('public-view', viewKey === 'public-landing');
+
+    // Show/hide host admin preview banner on public page based on whether this browser is authenticated
+    const adminBanner = document.getElementById('public-admin-banner');
+    if (adminBanner) {
+      adminBanner.style.display = (viewKey === 'public-landing' && state.auth.authenticated) ? 'flex' : 'none';
+    }
 
     const profileDrop = document.getElementById('user-profile-dropdown');
     if (profileDrop) profileDrop.classList.remove('show');
 
     if (viewKey === 'scheduled-events') renderScheduledMeetings();
     if (viewKey === 'availability') renderWeeklySchedule();
+    if (viewKey === 'workflows') renderWorkflows();
     if (viewKey === 'public-landing') renderPublicLandingView();
   }
 
@@ -1512,17 +1947,255 @@
     });
   });
 
+  // --- Automated Workflows Execution Engine ---
+  async function triggerWorkflows(triggerEvent, meeting, meta = {}) {
+    if (!meeting) return;
+    const activeWfs = state.workflows.filter(wf => {
+      if (!wf.active) return false;
+      if (triggerEvent === 'booking_created') return wf.trigger === 'booking_created' || wf.trigger === 'reminder_24h' || (meeting.inviteePhone && wf.trigger === 'reminder_1h');
+      if (triggerEvent === 'booking_canceled' || triggerEvent === 'booking_deleted') return wf.trigger === 'booking_canceled';
+      return false;
+    });
+
+    for (const wf of activeWfs) {
+      let actionDetails = '';
+      let status = 'success';
+
+      if (triggerEvent === 'booking_created') {
+        if (wf.id === 'wf-confirmation-email') {
+          actionDetails = `Correo de confirmación enviado a ${meeting.inviteeEmail} y ${meeting.hostName || 'Anfitrión'} con archivo .ics y link de Meet`;
+        } else if (wf.id === 'wf-reminder-24h') {
+          status = 'scheduled';
+          actionDetails = `Recordatorio por Email programado para enviarse 24 horas antes a ${meeting.inviteeEmail}`;
+        } else if (wf.id === 'wf-reminder-1h-sms') {
+          status = 'scheduled';
+          actionDetails = `Recordatorio SMS/WhatsApp programado para 1 hora antes al número ${meeting.inviteePhone}`;
+        } else {
+          actionDetails = `Flujo ${wf.name} ejecutado para la nueva reserva`;
+        }
+      } else {
+        // Canceled or deleted
+        actionDetails = `Aviso inmediato de cancelación enviado a ${meeting.inviteeEmail} y ${meeting.hostName || 'Anfitrión'}. Horario liberado en agenda`;
+      }
+
+      const logEntry = {
+        id: 'wfl-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+        workflowId: wf.id,
+        workflowName: wf.name,
+        meetingId: meeting.id,
+        meetingTitle: meeting.eventTitle || 'Reunión',
+        inviteeEmail: meeting.inviteeEmail,
+        inviteeName: meeting.inviteeName,
+        triggerEvent,
+        timestamp: new Date().toISOString(),
+        status,
+        details: actionDetails
+      };
+
+      state.workflowLogs.unshift(logEntry);
+      if (state.workflowLogs.length > 50) state.workflowLogs.pop();
+
+      // Show toast alert
+      const icon = triggerEvent === 'booking_created' ? '⚡' : '🗑️';
+      showToast(`${icon} Flujo activado: ${wf.name}`, 'info');
+    }
+
+    saveState();
+    renderWorkflows();
+  }
+
+  function toggleWorkflow(workflowId, isActive) {
+    const wf = state.workflows.find(w => w.id === workflowId);
+    if (!wf) return;
+    wf.active = isActive;
+    saveState();
+    renderWorkflows();
+    showToast(`Flujo "${wf.name}" ${isActive ? 'activado' : 'pausado'}`);
+  }
+
+  function clearWorkflowLogs() {
+    if (confirm('¿Deseas vaciar el historial de ejecuciones de flujos de trabajo?')) {
+      state.workflowLogs = [];
+      saveState();
+      renderWorkflows();
+      showToast('Historial de flujos vaciado');
+    }
+  }
+
+  function renderWorkflows() {
+    const grid = document.getElementById('workflows-grid');
+    if (grid) {
+      grid.innerHTML = state.workflows.map(wf => `
+        <div class="event-card">
+          <div class="card-top-accent" style="background: ${wf.accentColor};"></div>
+          <div class="card-body">
+            <h3 class="card-title">${escapeHtml(wf.name)}</h3>
+            <p class="card-description">${escapeHtml(wf.description)}</p>
+            <div class="card-meta-row">
+              <span class="meta-pill meta-pill-location">${escapeHtml(wf.triggerLabel)}</span>
+              <span class="meta-pill">Canal: ${escapeHtml(wf.channel)}</span>
+            </div>
+          </div>
+          <div class="card-footer">
+            <span class="form-hint">Estado del flujo</span>
+            <label class="toggle-switch">
+              <input type="checkbox" ${wf.active ? 'checked' : ''} onchange="window.ReunionesApp.toggleWorkflow('${wf.id}', this.checked)">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    const countEl = document.getElementById('workflow-logs-count');
+    if (countEl) {
+      countEl.textContent = `${state.workflowLogs.length} ${state.workflowLogs.length === 1 ? 'ejecución' : 'ejecuciones'}`;
+    }
+
+    const logContainer = document.getElementById('workflow-logs-container');
+    if (logContainer) {
+      if (state.workflowLogs.length === 0) {
+        logContainer.innerHTML = `
+          <div style="padding: 36px 24px; text-align: center; color: var(--text-muted);">
+            <div style="font-size: 2.2rem; margin-bottom: 8px;">⚡</div>
+            <div style="font-weight: 600; font-size: 1rem; color: var(--text-main); margin-bottom: 4px;">Sin ejecuciones registradas aún</div>
+            <div style="font-size: 0.875rem; max-width: 480px; margin: 0 auto;">Cuando se cree o cancele una reunión, los flujos activos se dispararán automáticamente y se registrarán aquí en tiempo real con sus detalles.</div>
+          </div>
+        `;
+      } else {
+        logContainer.innerHTML = state.workflowLogs.map(log => {
+          const date = new Date(log.timestamp);
+          const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const dateStr = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+          const isCreation = log.triggerEvent === 'booking_created';
+          const isSuccess = log.status === 'success';
+          return `
+            <div style="display: flex; align-items: flex-start; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border-color); gap: 16px;">
+              <div style="display: flex; align-items: flex-start; gap: 12px;">
+                <div style="width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1rem; background: ${isCreation ? 'rgba(0, 107, 255, 0.1)' : 'rgba(225, 29, 72, 0.1)'}; color: ${isCreation ? 'var(--primary)' : 'var(--accent-rose, #e11d48)'}; flex-shrink: 0; margin-top: 2px;">
+                  ${isCreation ? '✉️' : '🗑️'}
+                </div>
+                <div>
+                  <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                    <span style="font-weight: 600; font-size: 0.9375rem; color: var(--text-main);">${escapeHtml(log.workflowName)}</span>
+                    <span style="font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: ${isSuccess ? 'rgba(16, 185, 129, 0.1)' : 'rgba(59, 130, 246, 0.1)'}; color: ${isSuccess ? 'var(--accent-emerald)' : 'var(--primary)'};">
+                      ${isSuccess ? '✓ Ejecutado con éxito' : '⏰ Programado'}
+                    </span>
+                  </div>
+                  <div style="font-size: 0.8125rem; color: var(--text-muted); margin-top: 4px;">
+                    ${escapeHtml(log.details)}
+                  </div>
+                  <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
+                    Evento: <strong>${escapeHtml(log.meetingTitle)}</strong> • Invitado: <strong>${escapeHtml(log.inviteeName || 'Invitado')}</strong> &lt;${escapeHtml(log.inviteeEmail)}&gt;
+                  </div>
+                </div>
+              </div>
+              <div style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; text-align: right;">
+                <div>${timeStr}</div>
+                <div>${dateStr}</div>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+  }
+
   // Cancel Meeting
-  function cancelMeeting(meetingId) {
+  async function cancelMeeting(meetingId) {
     const meet = state.scheduledMeetings.find(m => m.id === meetingId);
     if (!meet) return;
 
-    if (confirm(`¿Deseas cancelar la reunión con ${meet.inviteeName}?`)) {
-      meet.status = 'canceled';
-      saveState();
-      renderScheduledMeetings();
-      showToast('Reunión cancelada');
+    if (!confirm(`¿Deseas cancelar la reunión con ${meet.inviteeName}? Se disparará el flujo de notificación por correo y se liberará el horario.`)) {
+      return;
     }
+
+    meet.status = 'canceled';
+
+    // Unblock slot in memory immediately
+    if (state.googleCalendar && Array.isArray(state.googleCalendar.events)) {
+      state.googleCalendar.events = state.googleCalendar.events.filter(ev => ev.id !== meetingId);
+      state.googleCalendar.eventCount = state.googleCalendar.events.length;
+    }
+    if (state.publicHost && Array.isArray(state.publicHost.events)) {
+      state.publicHost.events = state.publicHost.events.filter(ev => ev.id !== meetingId);
+    }
+
+    saveState();
+    renderScheduledMeetings();
+
+    // Trigger Workflows for cancellation
+    await triggerWorkflows('booking_canceled', meet);
+
+    // Call server API to delete/cancel in Google Calendar & update server storage
+    try {
+      const res = await fetch('/api/calendar/cancel-meeting', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meetingId,
+          deletePermanently: false,
+          googleEventId: meet.googleEventId || null
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data && data.googleEventDeleted) {
+        showToast('Evento cancelado en Google Calendar', '📅');
+      }
+    } catch (err) {
+      console.warn('Error calling cancel-meeting API:', err);
+    }
+
+    renderScheduledMeetings();
+    showToast('Reunión cancelada y horario liberado');
+  }
+
+  // Delete Meeting Permanently
+  async function deleteMeeting(meetingId) {
+    const meet = state.scheduledMeetings.find(m => m.id === meetingId);
+    if (!meet) return;
+
+    if (!confirm(`¿Deseas eliminar permanentemente la reunión de ${meet.inviteeName}? Se disparará el flujo de cancelación y se liberará la agenda.`)) {
+      return;
+    }
+
+    // Trigger Workflows for deletion
+    await triggerWorkflows('booking_deleted', meet);
+
+    // Remove from array completely
+    state.scheduledMeetings = state.scheduledMeetings.filter(m => m.id !== meetingId);
+
+    // Unblock slot in memory immediately
+    if (state.googleCalendar && Array.isArray(state.googleCalendar.events)) {
+      state.googleCalendar.events = state.googleCalendar.events.filter(ev => ev.id !== meetingId);
+      state.googleCalendar.eventCount = state.googleCalendar.events.length;
+    }
+    if (state.publicHost && Array.isArray(state.publicHost.events)) {
+      state.publicHost.events = state.publicHost.events.filter(ev => ev.id !== meetingId);
+    }
+
+    saveState();
+    renderScheduledMeetings();
+
+    // Call server API to delete in Google Calendar & remove from server storage
+    try {
+      await fetch('/api/calendar/cancel-meeting', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meetingId,
+          deletePermanently: true,
+          googleEventId: meet.googleEventId || null
+        })
+      });
+    } catch (err) {
+      console.warn('Error calling cancel-meeting API:', err);
+    }
+
+    renderScheduledMeetings();
+    showToast('Reunión eliminada permanentemente');
   }
 
   // Save Availability Settings
@@ -1555,17 +2228,27 @@
 
   // Top banner copy main page link
   document.getElementById('btn-copy-main-link').addEventListener('click', () => {
-    const slug = getHostSlug();
-    copyToClipboard(`${window.location.origin}/#/user/${slug}`, 'Enlace de tu página principal copiado');
+    copyToClipboard(buildPublicUserUrl(), 'Enlace de tu página principal copiado');
   });
 
-  // Public Landing Functions
+  // =========================================================================
+  // ORIGINAL CALENDLY PUBLIC PROFILE & INLINE SPLIT-SCREEN BOOKING PAGE
+  // =========================================================================
   function goToPublicLanding() {
-    // Close any open modals first
     document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
     const slug = getHostSlug();
-    window.location.hash = `#/user/${slug}`;
+    const ht = state.auth?.publicHostToken || '';
+    window.location.hash = `#/user/${slug}${ht ? '?ht=' + encodeURIComponent(ht) : ''}`;
+    showPublicDirectoryMode();
     switchView('public-landing');
+  }
+
+  function showPublicDirectoryMode() {
+    const dirPane = document.getElementById('public-directory-pane');
+    const bookPane = document.getElementById('public-booking-pane');
+    if (dirPane) dirPane.style.display = 'flex';
+    if (bookPane) bookPane.style.display = 'none';
+    renderPublicLandingView();
   }
 
   function renderPublicLandingView() {
@@ -1573,56 +2256,483 @@
     const list = document.getElementById('public-events-list-container');
     const pill = document.getElementById('public-cal-pill');
     const pillText = document.getElementById('public-cal-pill-text');
+    const adminBanner = document.getElementById('public-admin-banner');
+    if (adminBanner) {
+      adminBanner.style.display = state.auth.authenticated ? 'flex' : 'none';
+    }
     if (!list) return;
 
-    if (state.googleCalendar && state.googleCalendar.connected) {
+    const isPubConnected = (state.publicHost && state.publicHost.connected) || (state.googleCalendar && state.googleCalendar.connected);
+    if (isPubConnected) {
       if (pill) pill.style.display = 'inline-flex';
-      if (pillText) pillText.textContent = `Sincronizado con Google Calendar (${getHostName()})`;
+      if (pillText) pillText.textContent = `Disponibilidad verificada en tiempo real con Google Calendar`;
     } else {
       if (pill) pill.style.display = 'none';
     }
 
     const activeEvents = state.eventTypes.filter(e => e.active);
     if (activeEvents.length === 0) {
-      list.innerHTML = `<p class="form-hint" style="text-align: center; padding: 40px 0;">No hay tipos de reunión activos actualmente.</p>`;
+      list.innerHTML = `<p class="form-hint" style="grid-column: 1 / -1; text-align: center; padding: 40px 0;">No hay tipos de reunión activos actualmente.</p>`;
       return;
     }
 
     list.innerHTML = activeEvents.map(ev => `
-      <div class="public-event-row" onclick="window.ReunionesApp.openBookingModal('${ev.id}')">
-        <div class="public-event-indicator" style="background: ${ev.color || 'var(--primary)'};"></div>
-        <div class="public-event-details">
-          <h3 class="public-event-title">${escapeHtml(ev.name)}</h3>
-          <div class="public-event-meta">
-            <span class="meta-item">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"></circle>
-                <polyline points="12 6 12 12 16 14"></polyline>
-              </svg>
-              ${ev.duration} min
-            </span>
-            <span class="meta-item">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polygon points="23 7 16 12 23 17 23 7"></polygon>
-                <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
-              </svg>
-              ${escapeHtml(ev.location)}
-            </span>
+      <div class="calendly-public-event-card" onclick="window.ReunionesApp.openPublicEventBooking('${ev.id}')">
+        <div>
+          <div class="calendly-public-event-top">
+            <div class="calendly-public-event-title-wrap">
+              <span class="calendly-event-color-dot" style="background: ${ev.color || 'var(--primary)'};"></span>
+              <h3 class="calendly-public-event-name">${escapeHtml(ev.name)}</h3>
+            </div>
+            <span class="calendly-public-event-arrow">&rarr;</span>
           </div>
-          <p class="public-event-desc">${escapeHtml(ev.description || 'Llamada rápida para coordinar detalles y siguientes pasos.')}</p>
+          <p class="calendly-public-event-desc">${escapeHtml(ev.description || 'Agenda una sesión en el horario disponible que mejor te acomode.')}</p>
         </div>
-        <button class="btn-primary public-event-book-btn" onclick="event.stopPropagation(); window.ReunionesApp.openBookingModal('${ev.id}')">
-          Reservar &rarr;
-        </button>
+        <div class="calendly-public-event-meta">
+          <span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+            ${ev.duration} min
+          </span>
+          <span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="23 7 16 12 23 17 23 7"></polygon>
+              <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+            </svg>
+            ${escapeHtml(ev.location)}
+          </span>
+        </div>
       </div>
     `).join('');
   }
 
-  // Public Landing Button in Header
+  function openPublicEventBooking(eventIdOrSlug) {
+    const ev = state.eventTypes.find(e => e.id === eventIdOrSlug || e.slug === eventIdOrSlug) || state.eventTypes[0];
+    if (!ev) return;
+
+    state.bookingEvent = ev;
+    state.selectedDate = null;
+    state.selectedSlot = null;
+    state.currentCalDate = new Date();
+
+    // Ensure we are on the standalone public-landing view
+    if (state.activeAppView !== 'public-landing') {
+      switchView('public-landing');
+    }
+
+    const dirPane = document.getElementById('public-directory-pane');
+    const bookPane = document.getElementById('public-booking-pane');
+    if (dirPane) dirPane.style.display = 'none';
+    if (bookPane) bookPane.style.display = 'block';
+
+    // Preserve host and ht query parameters in the hash when opening a specific event
+    const ctx = getPublicRouteContext();
+    const effectiveHostSlug = ctx.hostSlug || getHostSlug(getPublicHostName());
+    const mySlug = state.auth && state.auth.authenticated && state.auth.user ? getHostSlug(state.auth.user.name) : '';
+    const effectiveHostToken = ctx.hostToken || ((!ctx.hostSlug || ctx.hostSlug === mySlug) ? (state.auth?.publicHostToken || '') : '');
+    const params = new URLSearchParams();
+    if (effectiveHostSlug) params.set('host', effectiveHostSlug);
+    if (effectiveHostToken) params.set('ht', effectiveHostToken);
+    const qs = params.toString();
+    const targetHash = `#/book/${ev.slug}${qs ? '?' + qs : ''}`;
+    if (window.location.hash !== targetHash) {
+      history.replaceState(null, '', window.location.pathname + targetHash);
+    }
+
+    // Reset steps inside inline split view
+    const stepCal = document.getElementById('pub-step-calendar');
+    const stepForm = document.getElementById('pub-step-form');
+    const stepSuccess = document.getElementById('pub-step-success');
+    const summaryRow = document.getElementById('pub-selected-datetime-summary');
+    if (stepCal) stepCal.style.display = 'flex';
+    if (stepForm) stepForm.style.display = 'none';
+    if (stepSuccess) stepSuccess.style.display = 'none';
+    if (summaryRow) summaryRow.style.display = 'none';
+
+    // Populate Left Column details using the Public Host's identity
+    const hostName = getPublicHostName();
+    const initials = getInitials(hostName);
+    const isOwnPage = mySlug && mySlug === getHostSlug(hostName);
+    const picture = isOwnPage && state.auth.user ? state.auth.user.picture : null;
+    renderAvatarElement(document.getElementById('pub-book-host-avatar'), initials, picture, hostName);
+    const hostEl = document.getElementById('pub-book-host-name');
+    if (hostEl) hostEl.textContent = hostName;
+
+    const titleEl = document.getElementById('pub-book-event-title');
+    const durEl = document.getElementById('pub-book-event-duration');
+    const locEl = document.getElementById('pub-book-event-location');
+    const descEl = document.getElementById('pub-book-event-desc');
+    if (titleEl) titleEl.textContent = ev.name;
+    if (durEl) durEl.textContent = `${ev.duration} min`;
+    if (locEl) locEl.textContent = `${ev.location} (Los detalles de la conferencia web se proporcionan en la confirmación)`;
+    if (descEl) descEl.textContent = ev.description || 'Agenda una reunión en el horario disponible que mejor te acomode.';
+
+    renderPublicCalendar();
+    renderPublicTimeSlots();
+  }
+
+  function renderPublicCalendar() {
+    const monthLabel = document.getElementById('pub-calendar-month-label');
+    const grid = document.getElementById('pub-calendar-days-grid');
+    if (!grid || !monthLabel) return;
+
+    const year = state.currentCalDate.getFullYear();
+    const month = state.currentCalDate.getMonth();
+
+    const monthNames = [
+      'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+      'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+    ];
+    monthLabel.textContent = `${monthNames[month]} ${year}`;
+
+    const dayHeaders = ['LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB', 'DOM'];
+    let html = dayHeaders.map(h => `<div class="cal-day-header">${h}</div>`).join('');
+
+    const firstDayIndex = new Date(year, month, 1).getDay();
+    const startDay = (firstDayIndex + 6) % 7;
+    const totalDays = new Date(year, month + 1, 0).getDate();
+
+    for (let i = 0; i < startDay; i++) {
+      html += `<div class="cal-day-cell empty"></div>`;
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    for (let day = 1; day <= totalDays; day++) {
+      const cellDate = new Date(year, month, day);
+      cellDate.setHours(0, 0, 0, 0);
+
+      const isPast = cellDate < today;
+      const dayOfWeek = (cellDate.getDay() + 6) % 7;
+      const daySchedule = state.weeklySchedule[dayOfWeek];
+      const isDayOff = !daySchedule || !daySchedule.active;
+
+      const isDisabled = isPast || isDayOff;
+      const isSelected = state.selectedDate &&
+        state.selectedDate.getFullYear() === year &&
+        state.selectedDate.getMonth() === month &&
+        state.selectedDate.getDate() === day;
+
+      const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+      html += `
+        <div class="cal-day-cell ${isDisabled ? 'disabled' : ''} ${isSelected ? 'selected' : ''}"
+             data-date="${dateStr}"
+             onclick="window.ReunionesApp.selectPublicBookingDate('${dateStr}', this)">
+          ${day}
+        </div>
+      `;
+    }
+
+    grid.innerHTML = html;
+  }
+
+  function selectPublicBookingDate(dateStr, cellEl) {
+    document.querySelectorAll('#pub-calendar-days-grid .cal-day-cell.selected').forEach(c => c.classList.remove('selected'));
+    if (cellEl) cellEl.classList.add('selected');
+
+    const [y, m, d] = dateStr.split('-').map(Number);
+    state.selectedDate = new Date(y, m - 1, d);
+    state.selectedSlot = null;
+
+    renderPublicTimeSlots();
+  }
+
+  function renderPublicTimeSlots() {
+    const list = document.getElementById('pub-time-slots-list');
+    const headerDate = document.getElementById('pub-selected-date-label');
+    if (!list || !headerDate) return;
+
+    if (!state.selectedDate) {
+      headerDate.textContent = 'Selecciona un día';
+      list.innerHTML = `<p class="form-hint" style="text-align: center; margin-top: 30px;">Haz clic en una fecha disponible del calendario para ver los horarios.</p>`;
+      return;
+    }
+
+    const days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+    const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    headerDate.textContent = `${days[state.selectedDate.getDay()]}, ${state.selectedDate.getDate()} de ${months[state.selectedDate.getMonth()]}`;
+
+    const dayOfWeek = (state.selectedDate.getDay() + 6) % 7;
+    const schedule = state.weeklySchedule[dayOfWeek];
+    if (!schedule || !schedule.active) {
+      list.innerHTML = `<p class="form-hint" style="text-align: center; margin-top: 20px;">No hay horarios disponibles para este día.</p>`;
+      return;
+    }
+
+    const duration = (state.bookingEvent && state.bookingEvent.duration) || 15;
+    const [startH, startM] = schedule.start.split(':').map(Number);
+    const [endH, endM] = schedule.end.split(':').map(Number);
+
+    const startMinutes = startH * 60 + startM;
+    const endMinutes = endH * 60 + endM;
+
+    const slots = [];
+    for (let m = startMinutes; m + duration <= endMinutes; m += duration >= 30 ? 30 : 15) {
+      const h = Math.floor(m / 60);
+      const min = m % 60;
+      const timeStr = `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+      slots.push(timeStr);
+    }
+
+    const selYear = state.selectedDate.getFullYear();
+    const selMonth = state.selectedDate.getMonth();
+    const selDay = state.selectedDate.getDate();
+
+    const hostScheduled = Array.isArray(state.publicHost?.scheduledMeetings) && state.publicHost.scheduledMeetings.length > 0
+      ? state.publicHost.scheduledMeetings
+      : state.scheduledMeetings;
+
+    const hostBusyEvents = Array.isArray(state.publicHost?.events) && state.publicHost.events.length > 0
+      ? state.publicHost.events
+      : (state.googleCalendar.connected ? (state.googleCalendar.events || []) : []);
+
+    list.innerHTML = slots.map(timeStr => {
+      const isSelected = state.selectedSlot === timeStr;
+      const [slotH, slotM] = timeStr.split(':').map(Number);
+      const slotStart = new Date(selYear, selMonth, selDay, slotH, slotM, 0, 0);
+      const slotEnd = new Date(slotStart.getTime() + duration * 60000);
+
+      const meetingConflict = hostScheduled.find(m => {
+        if (m.status !== 'upcoming') return false;
+        const mStart = new Date(m.dateTime);
+        const mEnd = new Date(mStart.getTime() + (m.duration || 15) * 60000);
+        return slotStart < mEnd && slotEnd > mStart;
+      });
+
+      const gcalConflict = hostBusyEvents.find(ev => {
+        if (!ev.start || !ev.end) return false;
+        const evStart = new Date(ev.start);
+        const evEnd = new Date(ev.end);
+        return slotStart < evEnd && slotEnd > evStart;
+      });
+
+      if (meetingConflict || gcalConflict) {
+        return `
+          <div class="slot-item-wrapper">
+            <button type="button" class="slot-btn slot-busy" disabled title="Horario ocupado en el calendario del anfitrión">
+              ${timeStr} <span class="slot-busy-indicator">Ocupado</span>
+            </button>
+          </div>
+        `;
+      }
+
+      return `
+        <div class="slot-item-wrapper">
+          <button type="button" class="slot-btn ${isSelected ? 'selected' : ''}" onclick="window.ReunionesApp.choosePublicSlot('${timeStr}')">
+            ${timeStr}
+          </button>
+          ${isSelected ? `
+            <button type="button" class="slot-confirm-btn" onclick="window.ReunionesApp.proceedToPublicBookingForm('${timeStr}')">
+              Siguiente
+            </button>
+          ` : ''}
+        </div>
+      `;
+    }).join('');
+  }
+
+  function choosePublicSlot(timeStr) {
+    state.selectedSlot = timeStr;
+    renderPublicTimeSlots();
+  }
+
+  function proceedToPublicBookingForm(timeStr) {
+    state.selectedSlot = timeStr;
+    const stepCal = document.getElementById('pub-step-calendar');
+    const stepForm = document.getElementById('pub-step-form');
+    if (stepCal) stepCal.style.display = 'none';
+    if (stepForm) stepForm.style.display = 'flex';
+
+    const days = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+    const months = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+    const dateFormatted = `${timeStr}, ${days[state.selectedDate.getDay()]}, ${state.selectedDate.getDate()} de ${months[state.selectedDate.getMonth()]} de ${state.selectedDate.getFullYear()}`;
+
+    const summaryRow = document.getElementById('pub-selected-datetime-summary');
+    const summaryText = document.getElementById('pub-selected-datetime-text');
+    if (summaryRow) summaryRow.style.display = 'flex';
+    if (summaryText) summaryText.textContent = dateFormatted;
+  }
+
+  // Public Back Button (Step 2 -> Step 1, or Step 1 -> Host Profile Directory)
+  const btnPubBack = document.getElementById('btn-pub-back-to-directory');
+  if (btnPubBack) {
+    btnPubBack.addEventListener('click', () => {
+      const stepForm = document.getElementById('pub-step-form');
+      const stepCal = document.getElementById('pub-step-calendar');
+      const summaryRow = document.getElementById('pub-selected-datetime-summary');
+      if (stepForm && stepForm.style.display !== 'none') {
+        stepForm.style.display = 'none';
+        if (stepCal) stepCal.style.display = 'flex';
+        if (summaryRow) summaryRow.style.display = 'none';
+        return;
+      }
+      const ctx = getPublicRouteContext();
+      const slug = ctx.hostSlug || getHostSlug(getPublicHostName());
+      const ht = ctx.hostToken || state.auth?.publicHostToken || '';
+      window.location.hash = `#/user/${slug}${ht ? '?ht=' + encodeURIComponent(ht) : ''}`;
+      showPublicDirectoryMode();
+    });
+  }
+
+  const btnScheduleAnother = document.getElementById('btn-pub-schedule-another');
+  if (btnScheduleAnother) {
+    btnScheduleAnother.addEventListener('click', () => {
+      const ctx = getPublicRouteContext();
+      const slug = ctx.hostSlug || getHostSlug(getPublicHostName());
+      const ht = ctx.hostToken || state.auth?.publicHostToken || '';
+      window.location.hash = `#/user/${slug}${ht ? '?ht=' + encodeURIComponent(ht) : ''}`;
+      showPublicDirectoryMode();
+    });
+  }
+
+  const btnToggleGuests = document.getElementById('btn-pub-toggle-guests');
+  if (btnToggleGuests) {
+    btnToggleGuests.addEventListener('click', () => {
+      const box = document.getElementById('pub-guests-box');
+      if (box) {
+        box.style.display = box.style.display === 'none' ? 'block' : 'none';
+        btnToggleGuests.style.display = 'none';
+      }
+    });
+  }
+
+  const pubPrevMonth = document.getElementById('pub-cal-prev-month');
+  const pubNextMonth = document.getElementById('pub-cal-next-month');
+  if (pubPrevMonth) {
+    pubPrevMonth.addEventListener('click', () => {
+      state.currentCalDate.setMonth(state.currentCalDate.getMonth() - 1);
+      renderPublicCalendar();
+    });
+  }
+  if (pubNextMonth) {
+    pubNextMonth.addEventListener('click', () => {
+      state.currentCalDate.setMonth(state.currentCalDate.getMonth() + 1);
+      renderPublicCalendar();
+    });
+  }
+
+  const pubTzSelect = document.getElementById('pub-timezone-select');
+  if (pubTzSelect) {
+    pubTzSelect.addEventListener('change', () => {
+      const label = pubTzSelect.options[pubTzSelect.selectedIndex].text;
+      const metaTz = document.getElementById('pub-book-tz-meta');
+      if (metaTz) metaTz.textContent = label;
+    });
+  }
+
+  const pubBookingForm = document.getElementById('pub-form-invitee-booking');
+  if (pubBookingForm) {
+    pubBookingForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!state.selectedDate || !state.selectedSlot || !state.bookingEvent) return;
+
+      const submitBtn = pubBookingForm.querySelector('button[type="submit"]');
+      const origBtnText = submitBtn ? submitBtn.textContent : 'Programar evento';
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = '⏳ Agendando en el calendario...';
+      }
+
+      try {
+        const name = document.getElementById('pub-invitee-name').value.trim();
+        const email = document.getElementById('pub-invitee-email').value.trim();
+        const phone = document.getElementById('pub-invitee-phone').value.trim();
+        const notes = document.getElementById('pub-invitee-notes').value.trim();
+
+        const y = state.selectedDate.getFullYear();
+        const m = String(state.selectedDate.getMonth() + 1).padStart(2, '0');
+        const d = String(state.selectedDate.getDate()).padStart(2, '0');
+        const dateTimeIso = buildLocalDateTimeWithOffset(state.selectedDate, state.selectedSlot);
+        const resolvedTz = (Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions().timeZone) || 'America/Santiago';
+
+        const newMeeting = {
+          id: 'meet-' + Date.now(),
+          eventTypeId: state.bookingEvent.id,
+          eventTitle: state.bookingEvent.name,
+          eventColor: state.bookingEvent.color,
+          duration: state.bookingEvent.duration,
+          location: state.bookingEvent.location,
+          locationUrl: 'https://meet.google.com/' + Math.random().toString(36).substring(2, 5) + '-' + Math.random().toString(36).substring(2, 6) + '-' + Math.random().toString(36).substring(2, 5),
+          inviteeName: name,
+          inviteeEmail: email,
+          inviteePhone: phone,
+          inviteeNotes: notes,
+          dateTime: dateTimeIso,
+          timeZone: resolvedTz,
+          status: 'upcoming'
+        };
+
+        const bookResult = await submitBookingToServer(newMeeting);
+
+        if (!state.scheduledMeetings.some(item => item.id === newMeeting.id)) {
+          state.scheduledMeetings.unshift(newMeeting);
+        }
+        saveState();
+
+        // Trigger active Workflows for new public booking
+        await triggerWorkflows('booking_created', newMeeting);
+
+        document.getElementById('pub-step-form').style.display = 'none';
+        document.getElementById('pub-step-success').style.display = 'flex';
+
+        const hostName = getPublicHostName();
+        document.getElementById('pub-success-email').textContent = email;
+        document.getElementById('pub-success-title').textContent = state.bookingEvent.name;
+        document.getElementById('pub-success-host').textContent = hostName;
+        document.getElementById('pub-success-datetime').textContent = document.getElementById('pub-selected-datetime-text').textContent;
+        document.getElementById('pub-success-location').textContent = `${state.bookingEvent.location} (${newMeeting.locationUrl})`;
+
+        const btnG = document.getElementById('pub-btn-add-gcal');
+        if (btnG) {
+          btnG.textContent = (bookResult && bookResult.googleEventCreated)
+            ? '✓ Sincronizado en Google Calendar desde la app'
+            : '✓ Guardado en el calendario de la aplicación';
+          if (bookResult && !bookResult.googleEventCreated && bookResult.warning) {
+            showToast('No se pudo crear en Google Calendar: ' + bookResult.warning, '⚠️');
+            console.warn('Google Calendar API error:', bookResult.warning);
+          }
+          btnG.onclick = async (ev) => {
+            ev.preventDefault();
+            btnG.disabled = true;
+            btnG.textContent = '⏳ Sincronizando en la aplicación...';
+            await submitBookingToServer(newMeeting);
+            btnG.disabled = false;
+            btnG.textContent = '✓ Sincronizado en el calendario desde la app';
+            showToast('¡Reunión guardada y sincronizada directamente desde la aplicación!', '✓');
+          };
+        }
+
+        const btnIcs = document.getElementById('pub-btn-download-ics');
+        if (btnIcs) btnIcs.onclick = () => downloadIcsFile(newMeeting);
+
+        renderScheduledMeetings();
+        showToast('¡Reunión agendada directamente en el calendario desde la aplicación!', '🎉');
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = origBtnText;
+        }
+      }
+    });
+  }
+
+  // Public Landing Button in Header & Login Topbar
   document.getElementById('btn-public-landing-view').addEventListener('click', (e) => {
     e.preventDefault();
     goToPublicLanding();
   });
+
+  const authPublicBtn = document.getElementById('btn-auth-view-public');
+  if (authPublicBtn) {
+    authPublicBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      goToPublicLanding();
+    });
+  }
 
   // Return to Admin Button in Public View
   const returnAdminBtn = document.getElementById('btn-return-to-admin');
@@ -1637,8 +2747,7 @@
   const copyPubBtn = document.getElementById('btn-copy-public-page-url');
   if (copyPubBtn) {
     copyPubBtn.addEventListener('click', () => {
-      const slug = getHostSlug();
-      copyToClipboard(`${window.location.origin}/#/user/${slug}`, 'Enlace de tu página pública copiado');
+      copyToClipboard(buildPublicUserUrl(), 'Enlace de tu página pública copiado');
     });
   }
 
@@ -1680,21 +2789,123 @@
     btn.addEventListener('click', () => switchGCalTab(btn.getAttribute('data-gcal-tab')));
   });
 
-  async function fetchCalendarStatus() {
+  async function fetchPublicHostCalendarStatus() {
+    const ctx = getPublicRouteContext();
+    const params = new URLSearchParams({ public: '1' });
+    if (ctx.hostSlug) params.set('slug', ctx.hostSlug);
+    if (ctx.hostToken) params.set('ht', ctx.hostToken);
+
     try {
-      const res = await fetch('/api/calendar/status');
+      const res = await fetch(`/api/calendar/status?${params.toString()}`, {
+        method: 'GET',
+        credentials: 'same-origin',
+        cache: 'no-store'
+      });
       if (!res.ok) return;
       const data = await res.json();
       if (data.success) {
-        state.googleCalendar = {
+        state.publicHost = {
           connected: !!data.connected,
-          calendarName: data.calendarName,
-          lastSync: data.lastSync,
+          hostPublicName: data.hostPublicName || (ctx.hostSlug ? humanizeSlug(ctx.hostSlug) : null),
+          hostSlug: data.hostSlug || ctx.hostSlug || null,
           autoBlock: data.autoBlock !== false,
-          eventCount: data.eventCount || 0,
-          events: data.events || [],
-          isDemo: !!data.isDemo
+          events: Array.isArray(data.events) ? data.events : [],
+          scheduledMeetings: Array.isArray(data.scheduledMeetings) ? data.scheduledMeetings : []
         };
+        updateHostProfileUI();
+        if (state.activeAppView === 'public-landing') {
+          renderPublicLandingView();
+          if (state.selectedDate) {
+            renderPublicTimeSlots();
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Could not fetch public host calendar status:', e);
+    }
+  }
+
+  async function fetchCalendarStatus() {
+    if (isPublicRoute()) {
+      await fetchPublicHostCalendarStatus();
+    }
+
+    if (!state.auth.authenticated || !state.auth.user) {
+      resetCalendarStateInMemory();
+      updateGoogleCalendarUI();
+      return;
+    }
+
+    const userKey = getCurrentUserStorageKey();
+    const localMeta = loadUserLocalCalendarMeta(userKey);
+
+    try {
+      const res = await fetch('/api/calendar/status', {
+        method: 'GET',
+        credentials: 'same-origin',
+        cache: 'no-store'
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.success) {
+        if (data.publicHostToken) {
+          state.auth.publicHostToken = data.publicHostToken;
+        }
+        // Merge any meetings booked via public page on the server into state.scheduledMeetings
+        if (Array.isArray(data.scheduledMeetings) && data.scheduledMeetings.length > 0) {
+          let changedAny = false;
+          data.scheduledMeetings.forEach(srvMeet => {
+            if (!srvMeet || !srvMeet.id) return;
+            const existingIdx = state.scheduledMeetings.findIndex(localMeet => localMeet.id === srvMeet.id);
+            if (existingIdx === -1) {
+              state.scheduledMeetings.unshift(srvMeet);
+              changedAny = true;
+            } else if (srvMeet.googleEventCreated && !state.scheduledMeetings[existingIdx].googleEventCreated) {
+              state.scheduledMeetings[existingIdx] = { ...state.scheduledMeetings[existingIdx], ...srvMeet };
+              changedAny = true;
+            }
+          });
+          if (changedAny) {
+            saveState();
+            renderScheduledMeetings();
+          }
+        }
+        // If server is disconnected ONLY because of a serverless cold start,
+        // restore ONLY if THIS specific user had previously connected in this browser.
+        if (!data.connected && localMeta && localMeta.connected && localMeta.userKey === userKey) {
+          state.googleCalendar = {
+            connected: true,
+            calendarName: localMeta.calendarName || `Google Calendar (${state.auth.user.email})`,
+            hostPublicName: state.auth.user.name || null,
+            icalUrl: localMeta.icalUrl || '',
+            lastSync: localMeta.lastSync || null,
+            autoBlock: localMeta.autoBlock !== false,
+            eventCount: Array.isArray(localMeta.events) ? localMeta.events.length : 0,
+            events: Array.isArray(localMeta.events) ? localMeta.events : [],
+            isDemo: !!localMeta.isDemo,
+            syncMode: localMeta.syncMode || null
+          };
+        } else {
+          state.googleCalendar = {
+            connected: !!data.connected,
+            calendarName: data.connected ? (data.calendarName || null) : null,
+            hostPublicName: data.hostPublicName || state.auth.user.name || null,
+            icalUrl: data.connected ? (data.icalUrl || '') : '',
+            lastSync: data.connected ? data.lastSync : null,
+            autoBlock: data.autoBlock !== false,
+            eventCount: data.connected ? (data.eventCount || (data.events || []).length) : 0,
+            events: data.connected ? (data.events || []) : [],
+            isDemo: data.connected ? !!data.isDemo : false,
+            syncMode: data.connected ? (data.syncMode || null) : null
+          };
+          if (state.googleCalendar.connected) {
+            saveUserLocalCalendarMeta({
+              userKey,
+              ...state.googleCalendar
+            });
+          }
+        }
+        renderEventTypes();
         updateGoogleCalendarUI();
       }
     } catch (e) {
@@ -1703,8 +2914,21 @@
   }
 
   function updateGoogleCalendarUI() {
-    const isConn = state.googleCalendar.connected;
+    const isConn = !!state.googleCalendar.connected;
     updateHostProfileUI();
+
+    // Show/hide 1-click Google OAuth calendar connect box if logged in with Google
+    const oauthDirectBox = document.getElementById('gcal-oauth-direct-box');
+    if (oauthDirectBox) {
+      const isGoogleUser = !!(state.auth && state.auth.authenticated && state.auth.user && state.auth.user.provider === 'google');
+      oauthDirectBox.style.display = isGoogleUser ? 'block' : 'none';
+    }
+
+    // Keep iCal input isolated per user
+    const urlInput = document.getElementById('input-gcal-ical-url');
+    if (urlInput) {
+      urlInput.value = isConn ? (state.googleCalendar.icalUrl || '') : '';
+    }
     
     // Header Badge
     const headerBadge = document.getElementById('header-gcal-badge');
@@ -1716,15 +2940,19 @@
     // Availability view card
     const availBadge = document.getElementById('avail-gcal-status-badge');
     const availDesc = document.getElementById('avail-gcal-desc');
+    const availSyncBtn = document.getElementById('btn-avail-sync-now');
     if (availBadge) {
       availBadge.className = `status-pill-badge ${isConn ? 'connected' : 'disconnected'}`;
       availBadge.textContent = isConn ? 'Sincronizado' : 'Desconectado';
+    }
+    if (availSyncBtn) {
+      availSyncBtn.style.display = isConn ? 'inline-flex' : 'none';
     }
     if (availDesc) {
       if (isConn) {
         availDesc.innerHTML = `Sincronizado con <strong>${state.googleCalendar.calendarName || 'Google Calendar'}</strong> (${state.googleCalendar.eventCount} eventos bloqueantes). <a href="https://calendar.google.com/calendar/u/0/r" target="_blank" rel="noopener noreferrer" style="color: var(--primary); text-decoration: underline;">Abrir calendar.google.com/calendar/u/0/r ↗</a>`;
       } else {
-        availDesc.innerHTML = `Vinculado a <a href="https://calendar.google.com/calendar/u/0/r" target="_blank" rel="noopener noreferrer" style="color: var(--primary); text-decoration: underline;">calendar.google.com/calendar/u/0/r</a>. Bloquea horarios ocupados automáticamente.`;
+        availDesc.innerHTML = `Cada usuario tiene su propia sincronización independiente. Conecta tu Google Calendar para bloquear tus horarios ocupados automáticamente.`;
       }
     }
 
@@ -1765,14 +2993,16 @@
     }
   }
 
-  async function connectGoogleCalendar(icalUrl, isDemo = false) {
+  async function connectGoogleCalendar(icalUrl, isDemo = false, useGoogleOAuth = false) {
     const autoBlock = document.getElementById('chk-gcal-autoblock') ? document.getElementById('chk-gcal-autoblock').checked : true;
     try {
       showToast('Conectando a Google Calendar...', '⏳');
       const res = await fetch('/api/calendar/connect', {
         method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ icalUrl, autoBlock, isDemo })
+        body: JSON.stringify({ icalUrl, autoBlock, isDemo, useGoogleOAuth })
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
@@ -1784,18 +3014,33 @@
         return false;
       }
 
+      const syncMode = useGoogleOAuth ? 'google_oauth' : (isDemo ? 'demo' : 'ical');
+      if (data.publicHostToken) {
+        state.auth.publicHostToken = data.publicHostToken;
+      }
       state.googleCalendar = {
         connected: true,
         calendarName: data.calendarName,
+        hostPublicName: (state.auth.user && state.auth.user.name) || state.googleCalendar.hostPublicName || null,
+        icalUrl: data.icalUrl || icalUrl || '',
         lastSync: new Date().toISOString(),
         autoBlock: autoBlock,
-        eventCount: data.count || (data.events || []).length,
+        eventCount: typeof data.count === 'number' ? data.count : (data.events || []).length,
         events: data.events || [],
-        isDemo: !!isDemo
+        isDemo: !!isDemo,
+        syncMode
       };
+      saveUserLocalCalendarMeta({
+        userKey: getCurrentUserStorageKey(),
+        ...state.googleCalendar
+      });
+      renderEventTypes();
       updateGoogleCalendarUI();
       showToast(`¡Conectado exitosamente con ${data.calendarName}!`, '🎉');
-      if (state.selectedDate) renderTimeSlots();
+      if (state.selectedDate) {
+        renderTimeSlots();
+        renderPublicTimeSlots();
+      }
       return true;
     } catch (err) {
       showToast('Error de red al conectar', '⚠️');
@@ -1804,42 +3049,106 @@
   }
 
   async function syncGoogleCalendarNow() {
+    const syncBtn = document.getElementById('btn-gcal-sync-now');
+    const availSyncBtn = document.getElementById('btn-avail-sync-now');
+    if (syncBtn) {
+      syncBtn.disabled = true;
+      syncBtn.textContent = '↻ Sincronizando...';
+    }
+    if (availSyncBtn) {
+      availSyncBtn.disabled = true;
+      availSyncBtn.textContent = '↻ Sincronizando...';
+    }
+
     try {
-      showToast('Sincronizando eventos...', '↻');
-      const res = await fetch('/api/calendar/sync-now', { method: 'POST' });
+      showToast('Sincronizando eventos con Google Calendar...', '↻');
+      // Also make sure local scheduled meetings are pushed to server before syncing
+      await syncMeetingsToServer();
+
+      const urlInput = document.getElementById('input-gcal-ical-url');
+      const inputIcal = urlInput && urlInput.value ? urlInput.value.trim() : '';
+
+      const res = await fetch('/api/calendar/sync-now', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          icalUrl: inputIcal || state.googleCalendar.icalUrl || '',
+          isDemo: !!state.googleCalendar.isDemo,
+          syncMode: state.googleCalendar.syncMode || null
+        })
+      });
       const data = await res.json();
-      if (data.success) {
-        state.googleCalendar.events = data.events;
-        state.googleCalendar.eventCount = data.count;
+      if (res.ok && data.success) {
+        const events = Array.isArray(data.events) ? data.events : [];
+        if (Array.isArray(data.scheduledMeetings) && data.scheduledMeetings.length > 0) {
+          let addedAny = false;
+          data.scheduledMeetings.forEach(srvMeet => {
+            if (srvMeet && srvMeet.id && !state.scheduledMeetings.some(localMeet => localMeet.id === srvMeet.id)) {
+              state.scheduledMeetings.unshift(srvMeet);
+              addedAny = true;
+            }
+          });
+          if (addedAny) {
+            saveState();
+            renderScheduledMeetings();
+          }
+        }
+        state.googleCalendar.connected = true;
+        if (data.calendarName) state.googleCalendar.calendarName = data.calendarName;
+        state.googleCalendar.events = events;
+        state.googleCalendar.eventCount = typeof data.count === 'number' ? data.count : events.length;
         state.googleCalendar.lastSync = new Date().toISOString();
+        saveUserLocalCalendarMeta({
+          userKey: getCurrentUserStorageKey(),
+          ...state.googleCalendar
+        });
         updateGoogleCalendarUI();
-        if (state.selectedDate) renderTimeSlots();
-        showToast('Google Calendar sincronizado al día', '✓');
+        if (state.selectedDate) {
+          renderTimeSlots();
+          renderPublicTimeSlots();
+        }
+        if (data.warning && data.source === 'local_fallback') {
+          showToast(`Sincronizado (${state.googleCalendar.eventCount} eventos). Nota: habilita Google Calendar API en Google Cloud Console o usa el enlace iCal para leer eventos privados externos.`, 'ℹ️');
+        } else {
+          showToast(`Google Calendar sincronizado al día (${state.googleCalendar.eventCount} eventos activos)`, '✓');
+        }
       } else {
         showToast(data.error || 'Error al sincronizar', '⚠️');
       }
     } catch (e) {
-      showToast('Error al actualizar calendario', '⚠️');
+      showToast('Error al actualizar calendario: ' + e.message, '⚠️');
+    } finally {
+      if (syncBtn) {
+        syncBtn.disabled = false;
+        syncBtn.textContent = '↻ Sincronizar ahora';
+      }
+      if (availSyncBtn) {
+        availSyncBtn.disabled = false;
+        availSyncBtn.textContent = '↻ Sincronizar eventos';
+      }
     }
   }
 
   async function disconnectGoogleCalendar() {
     if (!confirm('¿Deseas desconectar Google Calendar? Los horarios ocupados ya no se bloquearán.')) return;
     try {
-      const res = await fetch('/api/calendar/disconnect', { method: 'POST' });
+      const res = await fetch('/api/calendar/disconnect', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store'
+      });
       const data = await res.json();
       if (data.success) {
-        state.googleCalendar = {
-          connected: false,
-          calendarName: null,
-          lastSync: null,
-          autoBlock: true,
-          events: [],
-          isDemo: false
-        };
+        clearUserLocalCalendarMeta();
+        resetCalendarStateInMemory();
         updateGoogleCalendarUI();
-        if (state.selectedDate) renderTimeSlots();
-        showToast('Google Calendar desconectado', 'ℹ️');
+        if (state.selectedDate) {
+          renderTimeSlots();
+          renderPublicTimeSlots();
+        }
+        showToast('Google Calendar desconectado para este usuario', 'ℹ️');
       }
     } catch (e) {
       showToast('Error al desconectar', '⚠️');
@@ -1886,19 +3195,29 @@
         showToast('Pega tu enlace iCal de Google Calendar primero', '⚠️');
         return;
       }
-      connectGoogleCalendar(url, false);
+      connectGoogleCalendar(url, false, false);
+    });
+  }
+
+  const oauthConnectBtn = document.getElementById('btn-gcal-oauth-connect');
+  if (oauthConnectBtn) {
+    oauthConnectBtn.addEventListener('click', () => {
+      connectGoogleCalendar('', false, true);
     });
   }
 
   const demoSubmitBtn = document.getElementById('btn-gcal-demo-submit');
   if (demoSubmitBtn) {
     demoSubmitBtn.addEventListener('click', () => {
-      connectGoogleCalendar('', true);
+      connectGoogleCalendar('', true, false);
     });
   }
 
   const syncNowBtn = document.getElementById('btn-gcal-sync-now');
   if (syncNowBtn) syncNowBtn.addEventListener('click', syncGoogleCalendarNow);
+
+  const availSyncNowBtn = document.getElementById('btn-avail-sync-now');
+  if (availSyncNowBtn) availSyncNowBtn.addEventListener('click', syncGoogleCalendarNow);
 
   const disconnectBtn = document.getElementById('btn-gcal-disconnect');
   if (disconnectBtn) disconnectBtn.addEventListener('click', disconnectGoogleCalendar);
@@ -1984,7 +3303,40 @@
     });
   }
 
-  // 3. Login Page Actions
+  // 3. Login & Registration Page Actions (Unique Per User)
+  let isSignupMode = false;
+
+  function setLoginSignupMode(signup) {
+    isSignupMode = !!signup;
+    const nameGroup = document.getElementById('login-group-name');
+    const titleEl = document.getElementById('login-card-title');
+    const subtitleEl = document.getElementById('login-card-subtitle');
+    const submitBtn = document.getElementById('btn-login-email-continue');
+    const footerPrompt = document.getElementById('login-footer-prompt');
+    const linkSignupEl = document.getElementById('link-login-signup');
+
+    if (nameGroup) nameGroup.style.display = isSignupMode ? 'block' : 'none';
+    if (titleEl) {
+      titleEl.textContent = isSignupMode
+        ? 'Crea tu cuenta en Reuniones'
+        : 'Inicia sesión en tu cuenta';
+    }
+    if (subtitleEl) {
+      subtitleEl.textContent = isSignupMode
+        ? 'Cada cuenta tiene su propio calendario y enlaces de reserva independientes.'
+        : 'Ingresa tu correo para comenzar.';
+    }
+    if (submitBtn) {
+      submitBtn.textContent = isSignupMode ? 'Crear cuenta' : 'Continuar';
+    }
+    if (footerPrompt) {
+      footerPrompt.textContent = isSignupMode ? '¿Ya tienes una cuenta?' : '¿No tienes una cuenta?';
+    }
+    if (linkSignupEl) {
+      linkSignupEl.textContent = isSignupMode ? 'Inicia sesión.' : 'Regístrate.';
+    }
+  }
+
   const btnLoginGoogle = document.getElementById('btn-login-google');
   if (btnLoginGoogle) {
     btnLoginGoogle.addEventListener('click', () => {
@@ -1995,7 +3347,7 @@
   const btnLoginMicrosoft = document.getElementById('btn-login-microsoft');
   if (btnLoginMicrosoft) {
     btnLoginMicrosoft.addEventListener('click', () => {
-      showToast('Inicio con Microsoft en desarrollo. Usa "Iniciar sesión con Google".', 'ℹ️');
+      showToast('Inicio con Microsoft en desarrollo. Usa tu correo o Google.', 'ℹ️');
     });
   }
 
@@ -2008,12 +3360,22 @@
 
   const formLoginEmail = document.getElementById('form-login-email');
   if (formLoginEmail) {
-    formLoginEmail.addEventListener('submit', (e) => {
+    formLoginEmail.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const email = document.getElementById('login-input-email').value.trim();
-      if (!email) return;
-      showToast(`Iniciando autenticación Google para ${email}...`, 'ℹ️');
-      initiateGoogleLogin();
+      const emailInput = document.getElementById('login-input-email');
+      const nameInput = document.getElementById('login-input-name');
+      const email = emailInput ? emailInput.value.trim() : '';
+      const name = nameInput ? nameInput.value.trim() : '';
+      if (!email) {
+        showToast('Ingresa un correo electrónico válido', '⚠️');
+        return;
+      }
+      if (isSignupMode && !name) {
+        showToast('Ingresa tu nombre completo para registrarte', '⚠️');
+        if (nameInput) nameInput.focus();
+        return;
+      }
+      await loginOrRegisterByEmail(email, name, isSignupMode);
     });
   }
 
@@ -2021,8 +3383,9 @@
   if (linkSignup) {
     linkSignup.addEventListener('click', (e) => {
       e.preventDefault();
-      showToast('En Calendly, el registro y login con Google son unificados. Haz clic en "Iniciar sesión con Google".', 'ℹ️');
-      initiateGoogleLogin();
+      setLoginSignupMode(!isSignupMode);
+      const targetInput = document.getElementById(isSignupMode ? 'login-input-name' : 'login-input-email');
+      if (targetInput) targetInput.focus();
     });
   }
 
@@ -2060,7 +3423,7 @@
   }
 
   // =========================================================================
-  // URL Hash & Deep Link Routing
+  // URL Hash & Deep Link Routing (with Strict Per-Browser Auth Guard)
   // =========================================================================
   function handleRouting() {
     const hash = window.location.hash || '';
@@ -2069,9 +3432,8 @@
 
     // Query params feedback
     if (urlParams.get('login') === 'success') {
-      showToast('¡Bienvenido! Has iniciado sesión con Google con éxito.', '🎉');
-      history.replaceState(null, '', window.location.pathname + (window.location.hash || ''));
-      checkAuthStatus();
+      showToast('¡Bienvenido! Has iniciado sesión con Google en este navegador.', '🎉');
+      history.replaceState(null, '', window.location.pathname + (window.location.hash || '#meeting_types'));
     }
 
     if (urlParams.get('error')) {
@@ -2086,36 +3448,55 @@
       history.replaceState(null, '', window.location.pathname + (window.location.hash || ''));
     }
 
-    // 1. Explicit Login Route
-    if (hash === '#login' || path === '/login') {
+    // 1. Public Direct Event Booking Link (#/book/:slug or /book/:slug)
+    if (hash.startsWith('#/book/') || path.startsWith('/book/')) {
+      const ctx = getPublicRouteContext();
+      const rawSlug = hash.startsWith('#/book/') ? hash.replace('#/book/', '') : path.replace('/book/', '');
+      const cleanSlug = ctx.eventSlug || rawSlug.split('?')[0];
+      document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
+      fetchPublicHostCalendarStatus();
+      switchView('public-landing');
+      openPublicEventBooking(cleanSlug);
+      return;
+    }
+
+    // 2. Public Host Profile Directory (#public, #/user/:slug, /public, /user/:slug)
+    if (hash === '#public' || hash.startsWith('#/user') || path === '/public' || path.startsWith('/user/')) {
+      document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
+      fetchPublicHostCalendarStatus();
+      showPublicDirectoryMode();
+      switchView('public-landing');
+      return;
+    }
+
+    // 3. Explicit Login Route (/login, /app/login, #login)
+    if (hash === '#login' || path === '/login' || path === '/app/login' || path === '/app/signup') {
+      document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
+      if (state.auth.authenticated) {
+        window.location.hash = '#meeting_types';
+        switchView('event-types');
+      } else {
+        switchView('login');
+      }
+      return;
+    }
+
+    // 4. Protected Admin Routes (/ or /app/scheduling/callie/user/me or /app/scheduling/meeting_types/user/me or #meeting_types)
+    // STRICT GUARD: If this browser is NOT authenticated, always show Login!
+    if (!state.auth.authenticated) {
       document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
       switchView('login');
       return;
     }
 
-    // 2. Calendly Meeting Types route (/app/scheduling/meeting_types/user/me)
-    if (path.startsWith('/app/scheduling') || hash === '#meeting_types' || hash === '#app') {
-      document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
+    // Authenticated browser -> show requested Admin Dashboard view
+    document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
+    if (hash === '#scheduled-events' || path.includes('/scheduled_events')) {
+      switchView('scheduled-events');
+    } else if (hash === '#availability' || path.includes('/availability')) {
+      switchView('availability');
+    } else {
       switchView('event-types');
-      return;
-    }
-
-    // 3. Public profile or booking link
-    if (hash === '#public' || hash.startsWith('#/user') || path === '/public' || path.startsWith('/user/')) {
-      document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
-      switchView('public-landing');
-      return;
-    }
-
-    // 4. Booking direct modal
-    if (hash.startsWith('#/book/') || path.startsWith('/book/')) {
-      const slug = hash.startsWith('#/book/') ? hash.replace('#/book/', '') : path.replace('/book/', '');
-      const ev = state.eventTypes.find(e => e.slug === slug || e.id === slug);
-      if (ev) {
-        document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
-        openBookingModal(ev.id);
-        return;
-      }
     }
   }
 
@@ -2124,6 +3505,11 @@
   // Expose public API for inline handlers
   window.ReunionesApp = {
     openBookingModal,
+    openPublicEventBooking,
+    selectPublicBookingDate,
+    choosePublicSlot,
+    proceedToPublicBookingForm,
+    showPublicDirectoryMode,
     openCreateModal,
     openEditModal,
     openShareModal,
@@ -2134,6 +3520,10 @@
     toggleCardMenu,
     copyEventLink,
     cancelMeeting,
+    deleteMeeting,
+    toggleWorkflow,
+    clearWorkflowLogs,
+    renderWorkflows,
     selectBookingDate,
     chooseSlot,
     proceedToBookingForm,
@@ -2147,21 +3537,40 @@
     initiateGoogleLogin,
     loginDemoUser,
     logoutUser,
-    checkAuthStatus
+    checkAuthStatus,
+    showToast
   };
 
-  // --- Initial Mount ---
-  loadState();
-  checkAuthStatus();
-  updateHostProfileUI();
-  renderEventTypes();
-  renderScheduledMeetings();
-  renderWeeklySchedule();
-  fetchCalendarStatus();
-  syncMeetingsToServer();
-  handleRouting();
+  // --- Initial Mount (Strict Per-Browser Auth First) ---
+  async function initApp() {
+    loadState();
+    renderEventTypes();
+    renderScheduledMeetings();
+    renderWeeklySchedule();
+    renderWorkflows();
 
-  console.log('✨ Reuniones (Calendly Clone) con Login de Google activo y listo.');
+    // If on a public route, render public page immediately while checking auth in parallel
+    if (isPublicRoute()) {
+      handleRouting();
+    } else {
+      // Default to Login view until per-browser session cookie is verified
+      switchView('login');
+    }
+
+    await checkAuthStatus();
+    await fetchCalendarStatus();
+    if (state.auth.authenticated) {
+      await syncMeetingsToServer();
+    }
+    renderEventTypes();
+    renderScheduledMeetings();
+    renderWorkflows();
+    handleRouting();
+  }
+
+  initApp();
+
+  console.log('✨ Reuniones (Calendly Clone) con Login aislado por navegador y Página Pública estilo Calendly original listo.');
 })();
 
 

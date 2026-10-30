@@ -1014,6 +1014,55 @@ export async function createGoogleCalendarEvent(accessToken, refreshToken = null
   }
 }
 
+export async function deleteGoogleCalendarEvent(accessToken, refreshToken = null, googleEventId = null) {
+  if (!accessToken || String(accessToken).startsWith('demo_token_') || !googleEventId) {
+    return { ok: false, error: 'No Google OAuth token or event ID provided' };
+  }
+
+  let refreshedToken = null;
+  let currentToken = accessToken;
+
+  try {
+    const doDelete = async (token) => {
+      const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(googleEventId)}?sendUpdates=all`;
+      return fetch(url, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+    };
+
+    let response = await doDelete(currentToken);
+
+    if (response.status === 401 && refreshToken) {
+      refreshedToken = await refreshGoogleAccessToken(refreshToken);
+      if (refreshedToken) {
+        currentToken = refreshedToken;
+        response = await doDelete(currentToken);
+      }
+    }
+
+    // 204 No Content is standard success; 404/410 means already removed
+    if (response.status === 204 || response.status === 404 || response.status === 410 || response.ok) {
+      return { ok: true, newAccessToken: refreshedToken };
+    }
+
+    const errorBody = await response.text();
+    return {
+      ok: false,
+      error: `Error eliminando evento de Google Calendar: ${response.status} ${errorBody}`,
+      newAccessToken: refreshedToken
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err.message || 'Error eliminando evento de Google Calendar',
+      newAccessToken: refreshedToken
+    };
+  }
+}
+
 export async function syncPendingMeetingsToGoogleCalendar(accessToken, refreshToken = null, meetings = [], existingEvents = [], user = null) {
   if (!accessToken || String(accessToken).startsWith('demo_token_') || !Array.isArray(meetings) || meetings.length === 0) {
     return { updated: false, meetings, newAccessToken: null };

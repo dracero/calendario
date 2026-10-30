@@ -139,6 +139,59 @@
     { day: 'Domingo', active: false, start: '10:00', end: '14:00' }
   ];
 
+  const DEFAULT_WORKFLOWS = [
+    {
+      id: 'wf-confirmation-email',
+      name: 'Confirmación inmediata por Email',
+      description: 'Envía automáticamente un correo al invitado y anfitrión con el enlace de reunión y archivo de calendario .ics adjunto.',
+      trigger: 'booking_created',
+      triggerLabel: 'Disparador: Tras reservar',
+      channel: 'Email',
+      accentColor: 'var(--primary)',
+      active: true
+    },
+    {
+      id: 'wf-cancellation-email',
+      name: 'Notificación de Cancelación por Email',
+      description: 'Notifica inmediatamente al invitado y anfitrión cuando una reunión se cancela o elimina, liberando el horario en la agenda y cancelando la videollamada.',
+      trigger: 'booking_canceled',
+      triggerLabel: 'Disparador: Al cancelar o borrar',
+      channel: 'Email',
+      accentColor: 'var(--accent-rose, #e11d48)',
+      active: true
+    },
+    {
+      id: 'wf-reminder-24h',
+      name: 'Recordatorio por Email 24h antes',
+      description: 'Reduce los no-shows recordando la cita al invitado con 24 horas de antelación con botón para reprogramar si es necesario.',
+      trigger: 'reminder_24h',
+      triggerLabel: 'Disparador: 24h antes',
+      channel: 'Email',
+      accentColor: 'var(--accent-emerald)',
+      active: true
+    },
+    {
+      id: 'wf-reminder-1h-sms',
+      name: 'Recordatorio por SMS / WhatsApp 1h antes',
+      description: 'Mensaje instantáneo al teléfono móvil del asistente con el link directo a la sala de videollamada.',
+      trigger: 'reminder_1h',
+      triggerLabel: 'Disparador: 1h antes',
+      channel: 'SMS / WhatsApp',
+      accentColor: 'var(--accent-amber)',
+      active: true
+    },
+    {
+      id: 'wf-followup-survey',
+      name: 'Email de Seguimiento y Encuesta',
+      description: 'Envía notas de la sesión, recursos mencionados y una breve encuesta de satisfacción al terminar la cita.',
+      trigger: 'post_meeting',
+      triggerLabel: 'Disparador: 1h post-cita',
+      channel: 'Email',
+      accentColor: 'var(--accent-purple)',
+      active: false
+    }
+  ];
+
   // --- State Management ---
   const state = {
     eventTypes: [],
@@ -157,6 +210,9 @@
     selectedSlot: null,
     // Active Share Event
     shareEvent: null,
+    // Workflows and Automation Logs
+    workflows: JSON.parse(JSON.stringify(DEFAULT_WORKFLOWS)),
+    workflowLogs: [],
     // Google Calendar Sync State
     googleCalendar: {
       connected: false,
@@ -208,6 +264,12 @@
       const storedSchedule = localStorage.getItem(`reuniones_weekly_schedule_${userKey}`);
       state.weeklySchedule = storedSchedule ? JSON.parse(storedSchedule) : JSON.parse(JSON.stringify(DEFAULT_WEEKLY_SCHEDULE));
 
+      const storedWorkflows = localStorage.getItem(`reuniones_workflows_${userKey}`);
+      state.workflows = storedWorkflows ? JSON.parse(storedWorkflows) : JSON.parse(JSON.stringify(DEFAULT_WORKFLOWS));
+
+      const storedLogs = localStorage.getItem(`reuniones_workflow_logs_${userKey}`);
+      state.workflowLogs = storedLogs ? JSON.parse(storedLogs) : [];
+
       const storedTz = localStorage.getItem(`reuniones_timezone_${userKey}`) || localStorage.getItem('reuniones_timezone');
       if (storedTz) state.timezone = storedTz;
 
@@ -220,6 +282,8 @@
       state.eventTypes = JSON.parse(JSON.stringify(DEFAULT_EVENT_TYPES));
       state.scheduledMeetings = JSON.parse(JSON.stringify(DEFAULT_SCHEDULED_MEETINGS));
       state.weeklySchedule = JSON.parse(JSON.stringify(DEFAULT_WEEKLY_SCHEDULE));
+      state.workflows = JSON.parse(JSON.stringify(DEFAULT_WORKFLOWS));
+      state.workflowLogs = [];
     }
   }
 
@@ -229,6 +293,8 @@
       localStorage.setItem(`reuniones_event_types_${userKey}`, JSON.stringify(state.eventTypes));
       localStorage.setItem(`reuniones_scheduled_${userKey}`, JSON.stringify(state.scheduledMeetings));
       localStorage.setItem(`reuniones_weekly_schedule_${userKey}`, JSON.stringify(state.weeklySchedule));
+      localStorage.setItem(`reuniones_workflows_${userKey}`, JSON.stringify(state.workflows));
+      localStorage.setItem(`reuniones_workflow_logs_${userKey}`, JSON.stringify(state.workflowLogs));
       localStorage.setItem(`reuniones_timezone_${userKey}`, state.timezone);
     } catch (e) {
       console.error('Failed to save to localStorage:', e);
@@ -922,13 +988,16 @@
               <a href="${m.locationUrl}" target="_blank" rel="noopener noreferrer" class="btn-primary" style="padding: 7px 14px; font-size: 0.8125rem;">
                 Unirse a videollamada
               </a>
-              <button class="btn-secondary" style="padding: 7px 12px; font-size: 0.8125rem;" onclick="window.ReunionesApp.cancelMeeting('${m.id}')">
+              <button class="btn-secondary" style="padding: 7px 12px; font-size: 0.8125rem;" onclick="window.ReunionesApp.cancelMeeting('${m.id}')" title="Cancelar reunión y disparar flujo de notificación">
                 Cancelar
               </button>
             ` : `
               <span style="font-size: 0.8125rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">
                 ${m.status === 'past' ? 'Completada' : 'Cancelada'}
               </span>
+              <button class="btn-secondary" style="padding: 7px 12px; font-size: 0.8125rem; color: var(--accent-rose, #e11d48);" onclick="window.ReunionesApp.deleteMeeting('${m.id}')" title="Eliminar reunión definitivamente y disparar flujo">
+                Eliminar
+              </button>
             `}
           </div>
         </div>
@@ -1367,6 +1436,9 @@
       }
       saveState();
 
+      // Trigger active Workflows for new booking
+      await triggerWorkflows('booking_created', newMeeting);
+
       // Show Step 3 (Confirmation)
       document.getElementById('booking-step-form').style.display = 'none';
       document.getElementById('booking-step-success').style.display = 'flex';
@@ -1802,6 +1874,7 @@
 
     if (viewKey === 'scheduled-events') renderScheduledMeetings();
     if (viewKey === 'availability') renderWeeklySchedule();
+    if (viewKey === 'workflows') renderWorkflows();
     if (viewKey === 'public-landing') renderPublicLandingView();
   }
 
@@ -1874,17 +1947,255 @@
     });
   });
 
+  // --- Automated Workflows Execution Engine ---
+  async function triggerWorkflows(triggerEvent, meeting, meta = {}) {
+    if (!meeting) return;
+    const activeWfs = state.workflows.filter(wf => {
+      if (!wf.active) return false;
+      if (triggerEvent === 'booking_created') return wf.trigger === 'booking_created' || wf.trigger === 'reminder_24h' || (meeting.inviteePhone && wf.trigger === 'reminder_1h');
+      if (triggerEvent === 'booking_canceled' || triggerEvent === 'booking_deleted') return wf.trigger === 'booking_canceled';
+      return false;
+    });
+
+    for (const wf of activeWfs) {
+      let actionDetails = '';
+      let status = 'success';
+
+      if (triggerEvent === 'booking_created') {
+        if (wf.id === 'wf-confirmation-email') {
+          actionDetails = `Correo de confirmación enviado a ${meeting.inviteeEmail} y ${meeting.hostName || 'Anfitrión'} con archivo .ics y link de Meet`;
+        } else if (wf.id === 'wf-reminder-24h') {
+          status = 'scheduled';
+          actionDetails = `Recordatorio por Email programado para enviarse 24 horas antes a ${meeting.inviteeEmail}`;
+        } else if (wf.id === 'wf-reminder-1h-sms') {
+          status = 'scheduled';
+          actionDetails = `Recordatorio SMS/WhatsApp programado para 1 hora antes al número ${meeting.inviteePhone}`;
+        } else {
+          actionDetails = `Flujo ${wf.name} ejecutado para la nueva reserva`;
+        }
+      } else {
+        // Canceled or deleted
+        actionDetails = `Aviso inmediato de cancelación enviado a ${meeting.inviteeEmail} y ${meeting.hostName || 'Anfitrión'}. Horario liberado en agenda`;
+      }
+
+      const logEntry = {
+        id: 'wfl-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+        workflowId: wf.id,
+        workflowName: wf.name,
+        meetingId: meeting.id,
+        meetingTitle: meeting.eventTitle || 'Reunión',
+        inviteeEmail: meeting.inviteeEmail,
+        inviteeName: meeting.inviteeName,
+        triggerEvent,
+        timestamp: new Date().toISOString(),
+        status,
+        details: actionDetails
+      };
+
+      state.workflowLogs.unshift(logEntry);
+      if (state.workflowLogs.length > 50) state.workflowLogs.pop();
+
+      // Show toast alert
+      const icon = triggerEvent === 'booking_created' ? '⚡' : '🗑️';
+      showToast(`${icon} Flujo activado: ${wf.name}`, 'info');
+    }
+
+    saveState();
+    renderWorkflows();
+  }
+
+  function toggleWorkflow(workflowId, isActive) {
+    const wf = state.workflows.find(w => w.id === workflowId);
+    if (!wf) return;
+    wf.active = isActive;
+    saveState();
+    renderWorkflows();
+    showToast(`Flujo "${wf.name}" ${isActive ? 'activado' : 'pausado'}`);
+  }
+
+  function clearWorkflowLogs() {
+    if (confirm('¿Deseas vaciar el historial de ejecuciones de flujos de trabajo?')) {
+      state.workflowLogs = [];
+      saveState();
+      renderWorkflows();
+      showToast('Historial de flujos vaciado');
+    }
+  }
+
+  function renderWorkflows() {
+    const grid = document.getElementById('workflows-grid');
+    if (grid) {
+      grid.innerHTML = state.workflows.map(wf => `
+        <div class="event-card">
+          <div class="card-top-accent" style="background: ${wf.accentColor};"></div>
+          <div class="card-body">
+            <h3 class="card-title">${escapeHtml(wf.name)}</h3>
+            <p class="card-description">${escapeHtml(wf.description)}</p>
+            <div class="card-meta-row">
+              <span class="meta-pill meta-pill-location">${escapeHtml(wf.triggerLabel)}</span>
+              <span class="meta-pill">Canal: ${escapeHtml(wf.channel)}</span>
+            </div>
+          </div>
+          <div class="card-footer">
+            <span class="form-hint">Estado del flujo</span>
+            <label class="toggle-switch">
+              <input type="checkbox" ${wf.active ? 'checked' : ''} onchange="window.ReunionesApp.toggleWorkflow('${wf.id}', this.checked)">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    const countEl = document.getElementById('workflow-logs-count');
+    if (countEl) {
+      countEl.textContent = `${state.workflowLogs.length} ${state.workflowLogs.length === 1 ? 'ejecución' : 'ejecuciones'}`;
+    }
+
+    const logContainer = document.getElementById('workflow-logs-container');
+    if (logContainer) {
+      if (state.workflowLogs.length === 0) {
+        logContainer.innerHTML = `
+          <div style="padding: 36px 24px; text-align: center; color: var(--text-muted);">
+            <div style="font-size: 2.2rem; margin-bottom: 8px;">⚡</div>
+            <div style="font-weight: 600; font-size: 1rem; color: var(--text-main); margin-bottom: 4px;">Sin ejecuciones registradas aún</div>
+            <div style="font-size: 0.875rem; max-width: 480px; margin: 0 auto;">Cuando se cree o cancele una reunión, los flujos activos se dispararán automáticamente y se registrarán aquí en tiempo real con sus detalles.</div>
+          </div>
+        `;
+      } else {
+        logContainer.innerHTML = state.workflowLogs.map(log => {
+          const date = new Date(log.timestamp);
+          const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const dateStr = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+          const isCreation = log.triggerEvent === 'booking_created';
+          const isSuccess = log.status === 'success';
+          return `
+            <div style="display: flex; align-items: flex-start; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border-color); gap: 16px;">
+              <div style="display: flex; align-items: flex-start; gap: 12px;">
+                <div style="width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1rem; background: ${isCreation ? 'rgba(0, 107, 255, 0.1)' : 'rgba(225, 29, 72, 0.1)'}; color: ${isCreation ? 'var(--primary)' : 'var(--accent-rose, #e11d48)'}; flex-shrink: 0; margin-top: 2px;">
+                  ${isCreation ? '✉️' : '🗑️'}
+                </div>
+                <div>
+                  <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                    <span style="font-weight: 600; font-size: 0.9375rem; color: var(--text-main);">${escapeHtml(log.workflowName)}</span>
+                    <span style="font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: ${isSuccess ? 'rgba(16, 185, 129, 0.1)' : 'rgba(59, 130, 246, 0.1)'}; color: ${isSuccess ? 'var(--accent-emerald)' : 'var(--primary)'};">
+                      ${isSuccess ? '✓ Ejecutado con éxito' : '⏰ Programado'}
+                    </span>
+                  </div>
+                  <div style="font-size: 0.8125rem; color: var(--text-muted); margin-top: 4px;">
+                    ${escapeHtml(log.details)}
+                  </div>
+                  <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
+                    Evento: <strong>${escapeHtml(log.meetingTitle)}</strong> • Invitado: <strong>${escapeHtml(log.inviteeName || 'Invitado')}</strong> &lt;${escapeHtml(log.inviteeEmail)}&gt;
+                  </div>
+                </div>
+              </div>
+              <div style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; text-align: right;">
+                <div>${timeStr}</div>
+                <div>${dateStr}</div>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+  }
+
   // Cancel Meeting
-  function cancelMeeting(meetingId) {
+  async function cancelMeeting(meetingId) {
     const meet = state.scheduledMeetings.find(m => m.id === meetingId);
     if (!meet) return;
 
-    if (confirm(`¿Deseas cancelar la reunión con ${meet.inviteeName}?`)) {
-      meet.status = 'canceled';
-      saveState();
-      renderScheduledMeetings();
-      showToast('Reunión cancelada');
+    if (!confirm(`¿Deseas cancelar la reunión con ${meet.inviteeName}? Se disparará el flujo de notificación por correo y se liberará el horario.`)) {
+      return;
     }
+
+    meet.status = 'canceled';
+
+    // Unblock slot in memory immediately
+    if (state.googleCalendar && Array.isArray(state.googleCalendar.events)) {
+      state.googleCalendar.events = state.googleCalendar.events.filter(ev => ev.id !== meetingId);
+      state.googleCalendar.eventCount = state.googleCalendar.events.length;
+    }
+    if (state.publicHost && Array.isArray(state.publicHost.events)) {
+      state.publicHost.events = state.publicHost.events.filter(ev => ev.id !== meetingId);
+    }
+
+    saveState();
+    renderScheduledMeetings();
+
+    // Trigger Workflows for cancellation
+    await triggerWorkflows('booking_canceled', meet);
+
+    // Call server API to delete/cancel in Google Calendar & update server storage
+    try {
+      const res = await fetch('/api/calendar/cancel-meeting', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meetingId,
+          deletePermanently: false,
+          googleEventId: meet.googleEventId || null
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data && data.googleEventDeleted) {
+        showToast('Evento cancelado en Google Calendar', '📅');
+      }
+    } catch (err) {
+      console.warn('Error calling cancel-meeting API:', err);
+    }
+
+    renderScheduledMeetings();
+    showToast('Reunión cancelada y horario liberado');
+  }
+
+  // Delete Meeting Permanently
+  async function deleteMeeting(meetingId) {
+    const meet = state.scheduledMeetings.find(m => m.id === meetingId);
+    if (!meet) return;
+
+    if (!confirm(`¿Deseas eliminar permanentemente la reunión de ${meet.inviteeName}? Se disparará el flujo de cancelación y se liberará la agenda.`)) {
+      return;
+    }
+
+    // Trigger Workflows for deletion
+    await triggerWorkflows('booking_deleted', meet);
+
+    // Remove from array completely
+    state.scheduledMeetings = state.scheduledMeetings.filter(m => m.id !== meetingId);
+
+    // Unblock slot in memory immediately
+    if (state.googleCalendar && Array.isArray(state.googleCalendar.events)) {
+      state.googleCalendar.events = state.googleCalendar.events.filter(ev => ev.id !== meetingId);
+      state.googleCalendar.eventCount = state.googleCalendar.events.length;
+    }
+    if (state.publicHost && Array.isArray(state.publicHost.events)) {
+      state.publicHost.events = state.publicHost.events.filter(ev => ev.id !== meetingId);
+    }
+
+    saveState();
+    renderScheduledMeetings();
+
+    // Call server API to delete in Google Calendar & remove from server storage
+    try {
+      await fetch('/api/calendar/cancel-meeting', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meetingId,
+          deletePermanently: true,
+          googleEventId: meet.googleEventId || null
+        })
+      });
+    } catch (err) {
+      console.warn('Error calling cancel-meeting API:', err);
+    }
+
+    renderScheduledMeetings();
+    showToast('Reunión eliminada permanentemente');
   }
 
   // Save Availability Settings
@@ -2361,6 +2672,9 @@
           state.scheduledMeetings.unshift(newMeeting);
         }
         saveState();
+
+        // Trigger active Workflows for new public booking
+        await triggerWorkflows('booking_created', newMeeting);
 
         document.getElementById('pub-step-form').style.display = 'none';
         document.getElementById('pub-step-success').style.display = 'flex';
@@ -3206,6 +3520,10 @@
     toggleCardMenu,
     copyEventLink,
     cancelMeeting,
+    deleteMeeting,
+    toggleWorkflow,
+    clearWorkflowLogs,
+    renderWorkflows,
     selectBookingDate,
     chooseSlot,
     proceedToBookingForm,
@@ -3229,6 +3547,7 @@
     renderEventTypes();
     renderScheduledMeetings();
     renderWeeklySchedule();
+    renderWorkflows();
 
     // If on a public route, render public page immediately while checking auth in parallel
     if (isPublicRoute()) {
@@ -3245,6 +3564,7 @@
     }
     renderEventTypes();
     renderScheduledMeetings();
+    renderWorkflows();
     handleRouting();
   }
 

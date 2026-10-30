@@ -925,6 +925,101 @@ export default async function handler(req, res) {
     return;
   }
 
+  // --- Calendar: Book Meeting ---
+  if (pathname === '/api/calendar/book' && req.method === 'POST') {
+    const body = await readBody(req);
+    const rawMeeting = body.meeting || {};
+
+    if (!rawMeeting.dateTime || !rawMeeting.inviteeEmail) {
+      sendJson(res, 400, { success: false, error: 'Datos de la reunión incompletos.' });
+      return;
+    }
+
+    const enrichedMeeting = {
+      ...rawMeeting,
+      id: rawMeeting.id || ('meet-' + Date.now()),
+      locationUrl: rawMeeting.locationUrl || 'https://meet.google.com/new',
+      status: 'upcoming'
+    };
+
+    const meetings = loadMeetings();
+    const exists = meetings.some(m => m.id === enrichedMeeting.id);
+    if (!exists) {
+      meetings.unshift(enrichedMeeting);
+    } else {
+      const idx = meetings.findIndex(m => m.id === enrichedMeeting.id);
+      if (idx !== -1) meetings[idx] = enrichedMeeting;
+    }
+    saveMeetings(meetings);
+
+    const config = loadSyncConfig();
+    const durationMs = (Number(enrichedMeeting.duration) || 30) * 60000;
+    const startObj = new Date(enrichedMeeting.dateTime);
+    const endObj = new Date(startObj.getTime() + durationMs);
+    const busyEvent = {
+      id: enrichedMeeting.id,
+      summary: `${enrichedMeeting.eventTitle || 'Reunión'} con ${enrichedMeeting.inviteeName || 'Invitado'}`,
+      start: startObj.toISOString(),
+      end: endObj.toISOString(),
+      location: enrichedMeeting.locationUrl || enrichedMeeting.location || 'Google Meet',
+      status: 'CONFIRMED'
+    };
+
+    config.events = Array.isArray(config.events) ? config.events : [];
+    if (!config.events.some(ev => ev.id === busyEvent.id)) {
+      config.events.push(busyEvent);
+    }
+    config.lastSync = new Date().toISOString();
+    saveSyncConfig(config);
+
+    sendJson(res, 200, {
+      success: true,
+      meeting: enrichedMeeting,
+      googleEventCreated: false
+    });
+    return;
+  }
+
+  // --- Calendar: Cancel or Delete Meeting ---
+  if (pathname === '/api/calendar/cancel-meeting' && req.method === 'POST') {
+    const body = await readBody(req);
+    const meetingId = (body.meetingId || '').trim();
+    const deletePermanently = !!body.deletePermanently;
+
+    if (!meetingId) {
+      sendJson(res, 400, { success: false, error: 'ID de reunión requerido.' });
+      return;
+    }
+
+    const meetings = loadMeetings();
+    const mIdx = meetings.findIndex(m => m.id === meetingId);
+    let foundMeeting = null;
+    if (mIdx !== -1) {
+      foundMeeting = meetings[mIdx];
+      if (deletePermanently) {
+        meetings.splice(mIdx, 1);
+      } else {
+        meetings[mIdx].status = 'canceled';
+      }
+      saveMeetings(meetings);
+    }
+
+    const config = loadSyncConfig();
+    if (config && Array.isArray(config.events)) {
+      config.events = config.events.filter(ev => ev.id !== meetingId);
+      config.lastSync = new Date().toISOString();
+      saveSyncConfig(config);
+    }
+
+    sendJson(res, 200, {
+      success: true,
+      status: deletePermanently ? 'deleted' : 'canceled',
+      meetingId,
+      freedSlot: true
+    });
+    return;
+  }
+
   // --- Calendar: Sync Meetings ---
   if (pathname === '/api/calendar/sync-meetings' && req.method === 'POST') {
     const body = await readBody(req);

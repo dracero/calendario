@@ -541,85 +541,27 @@
       <div class="user-context-banner">
         <div class="user-context-info">
           <h1>Flujos de Trabajo Automatizados</h1>
-          <p class="form-hint">Automatizaciones integradas de Calendly para recordatorios, confirmaciones y seguimiento.</p>
+          <p class="form-hint">Automatizaciones integradas de Calendly para recordatorios, confirmaciones, cancelaciones y seguimiento.</p>
         </div>
       </div>
 
-      <div class="event-types-grid" style="grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));">
-        <div class="event-card">
-          <div class="card-top-accent" style="background: var(--primary);"></div>
-          <div class="card-body">
-            <h3 class="card-title">Confirmación inmediata por Email</h3>
-            <p class="card-description">Envía automáticamente un correo al invitado y anfitrión con el enlace de reunión y archivo de calendario .ics adjunto.</p>
-            <div class="card-meta-row">
-              <span class="meta-pill meta-pill-location">Disparador: Tras reservar</span>
-              <span class="meta-pill">Canal: Email</span>
-            </div>
-          </div>
-          <div class="card-footer">
-            <span class="form-hint">Estado del flujo</span>
-            <label class="toggle-switch">
-              <input type="checkbox" checked>
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-        </div>
+      <div class="event-types-grid" id="workflows-grid" style="grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));">
+        <!-- Rendered dynamically by app.js -->
+      </div>
 
-        <div class="event-card">
-          <div class="card-top-accent" style="background: var(--accent-emerald);"></div>
-          <div class="card-body">
-            <h3 class="card-title">Recordatorio por Email 24h antes</h3>
-            <p class="card-description">Reduce los no-shows recordando la cita al invitado con 24 horas de antelación con botón para reprogramar si es necesario.</p>
-            <div class="card-meta-row">
-              <span class="meta-pill meta-pill-location">Disparador: 24h antes</span>
-              <span class="meta-pill">Canal: Email</span>
-            </div>
+      <!-- Execution History / Audit Trail -->
+      <div class="workflow-history-section" style="margin-top: 36px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <h2 style="font-size: 1.15rem; font-weight: 700; color: var(--text-main); margin: 0;">⚡ Actividad de Automatizaciones</h2>
+            <span class="badge" id="workflow-logs-count" style="background: var(--bg-subtle); color: var(--text-muted); font-size: 0.75rem; padding: 2px 8px; border-radius: 999px;">0 ejecuciones</span>
           </div>
-          <div class="card-footer">
-            <span class="form-hint">Estado del flujo</span>
-            <label class="toggle-switch">
-              <input type="checkbox" checked>
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
+          <button type="button" class="btn-secondary" style="padding: 6px 12px; font-size: 0.8125rem;" onclick="window.ReunionesApp.clearWorkflowLogs()">
+            Limpiar registro
+          </button>
         </div>
-
-        <div class="event-card">
-          <div class="card-top-accent" style="background: var(--accent-amber);"></div>
-          <div class="card-body">
-            <h3 class="card-title">Recordatorio por SMS 1h antes</h3>
-            <p class="card-description">Mensaje de texto instantáneo al teléfono móvil del asistente con el link directo a la sala de videollamada.</p>
-            <div class="card-meta-row">
-              <span class="meta-pill meta-pill-location">Disparador: 1h antes</span>
-              <span class="meta-pill">Canal: SMS / WhatsApp</span>
-            </div>
-          </div>
-          <div class="card-footer">
-            <span class="form-hint">Estado del flujo</span>
-            <label class="toggle-switch">
-              <input type="checkbox" checked>
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-        </div>
-
-        <div class="event-card">
-          <div class="card-top-accent" style="background: var(--accent-purple);"></div>
-          <div class="card-body">
-            <h3 class="card-title">Email de Seguimiento y Encuesta</h3>
-            <p class="card-description">Envía notas de la sesión, recursos mencionados y una breve encuesta de satisfacción al terminar la cita.</p>
-            <div class="card-meta-row">
-              <span class="meta-pill meta-pill-location">Disparador: 1h post-cita</span>
-              <span class="meta-pill">Canal: Email</span>
-            </div>
-          </div>
-          <div class="card-footer">
-            <span class="form-hint">Estado del flujo</span>
-            <label class="toggle-switch">
-              <input type="checkbox">
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
+        <div id="workflow-logs-container" class="workflow-logs-list" style="background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: var(--radius-lg); overflow: hidden;">
+          <!-- Rendered dynamically by app.js -->
         </div>
       </div>
     </section>

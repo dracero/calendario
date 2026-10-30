@@ -16,3 +16,6 @@ dist/
 user-sessions.json
 *.log
 .DS_Store
+
+# Local agents configuration
+.agents/

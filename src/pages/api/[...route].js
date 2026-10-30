@@ -20,6 +20,7 @@ import {
   generateDemoEvents,
   fetchGoogleCalendarApiEvents,
   createGoogleCalendarEvent,
+  deleteGoogleCalendarEvent,
   syncPendingMeetingsToGoogleCalendar,
   generateIcsFeed,
   GOOGLE_AUTH_ENDPOINT,
@@ -1191,6 +1192,103 @@ export const ALL = async (context) => {
       hangoutLink: googleHangoutLink,
       warning: googleCalendarError
     }, 200, {}, updatedCookies);
+  }
+
+  // --- Calendar: Cancel or Delete Meeting & Trigger Google Calendar cancellation ---
+  if (pathname === '/api/calendar/cancel-meeting' && method === 'POST') {
+    const sessionData = getSessionData(request);
+    const user = sessionData?.user || null;
+    const body = await readRequestBody(request);
+
+    const meetingId = (body.meetingId || '').trim();
+    const deletePermanently = !!body.deletePermanently;
+    const hostSlug = (body.hostSlug || '').trim();
+    const hostToken = (body.hostToken || '').trim();
+
+    if (!meetingId) {
+      return jsonResponse({ success: false, error: 'ID de reunión requerido.' }, 400);
+    }
+
+    const { userKey: resolvedHostKey, config: hostConfig } = resolvePublicHostConfig(hostSlug || null, hostToken || null);
+    const effectiveHostKey = resolvedHostKey || (user ? (user.email || user.id) : null);
+    const effectiveSlug = hostSlug || hostConfig.hostSlug || (user ? slugifyName(user.name) : null);
+
+    let foundMeeting = null;
+    let googleEventDeleted = false;
+    let googleCalendarError = null;
+
+    // 1. Load Host meetings
+    const hostMeetings = loadMeetings(effectiveHostKey, effectiveSlug);
+    const mIdx = hostMeetings.findIndex(m => m.id === meetingId);
+    if (mIdx !== -1) {
+      foundMeeting = hostMeetings[mIdx];
+      if (deletePermanently) {
+        hostMeetings.splice(mIdx, 1);
+      } else {
+        hostMeetings[mIdx].status = 'canceled';
+      }
+      saveMeetings(hostMeetings, effectiveHostKey, effectiveSlug);
+    }
+
+    // 2. Unblock the slot in hostConfig.events so it can be re-booked
+    if (hostConfig && Array.isArray(hostConfig.events)) {
+      hostConfig.events = hostConfig.events.filter(ev => ev.id !== meetingId);
+      hostConfig.lastSync = new Date().toISOString();
+      saveSyncConfig(hostConfig, effectiveHostKey, effectiveSlug);
+    }
+
+    // 3. If visitor is also a logged in user, update visitor's meetings too
+    if (user && effectiveHostKey !== (user.email || user.id)) {
+      const visitorUserKey = user.email || user.id;
+      const visitorSlug = slugifyName(user.name);
+      const visitorMeetings = loadMeetings(visitorUserKey, visitorSlug);
+      const vmIdx = visitorMeetings.findIndex(m => m.id === meetingId);
+      if (vmIdx !== -1) {
+        if (!foundMeeting) foundMeeting = visitorMeetings[vmIdx];
+        if (deletePermanently) {
+          visitorMeetings.splice(vmIdx, 1);
+        } else {
+          visitorMeetings[vmIdx].status = 'canceled';
+        }
+        saveMeetings(visitorMeetings, visitorUserKey, visitorSlug);
+      }
+      const visitorConfig = loadSyncConfig(user);
+      if (visitorConfig && Array.isArray(visitorConfig.events)) {
+        visitorConfig.events = visitorConfig.events.filter(ev => ev.id !== meetingId);
+        saveSyncConfig(visitorConfig, visitorUserKey, visitorSlug);
+      }
+    }
+
+    // 4. Delete event from Google Calendar if event ID is present
+    const googleEventId = foundMeeting?.googleEventId || body.googleEventId;
+    if (googleEventId) {
+      if (hostConfig?.googleAccessToken && !String(hostConfig.googleAccessToken).startsWith('demo_token_')) {
+        const delRes = await deleteGoogleCalendarEvent(hostConfig.googleAccessToken, hostConfig.googleRefreshToken || null, googleEventId);
+        if (delRes.newAccessToken) hostConfig.googleAccessToken = delRes.newAccessToken;
+        if (delRes.ok) {
+          googleEventDeleted = true;
+        } else {
+          googleCalendarError = delRes.error;
+        }
+      }
+      if (!googleEventDeleted && sessionData?.accessToken && !user?.isDemo && !String(sessionData.accessToken).startsWith('demo_token_')) {
+        const delRes = await deleteGoogleCalendarEvent(sessionData.accessToken, sessionData.refreshToken || null, googleEventId);
+        if (delRes.ok) {
+          googleEventDeleted = true;
+        } else if (!googleCalendarError) {
+          googleCalendarError = delRes.error;
+        }
+      }
+    }
+
+    return jsonResponse({
+      success: true,
+      status: deletePermanently ? 'deleted' : 'canceled',
+      meetingId,
+      freedSlot: true,
+      googleEventDeleted,
+      warning: googleCalendarError
+    }, 200);
   }
 
   // --- Calendar: Sync Meetings (Strictly Per Authenticated User) ---
