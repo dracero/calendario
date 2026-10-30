@@ -1034,6 +1034,10 @@ export async function createGoogleCalendarEvent(accessToken, refreshToken = null
     }
 
     const created = await response.json();
+
+    // Ensure host calendar has native email notifications turned on for new and cancelled events
+    ensureHostCalendarEmailNotifications(currentToken).catch(() => {});
+
     return {
       ok: true,
       eventId: created.id,
@@ -1049,6 +1053,30 @@ export async function createGoogleCalendarEvent(accessToken, refreshToken = null
       error: err.message || 'Error insertando evento en Google Calendar',
       newAccessToken: refreshedToken
     };
+  }
+}
+
+export async function ensureHostCalendarEmailNotifications(accessToken) {
+  if (!accessToken || String(accessToken).startsWith('demo_token_')) return;
+  try {
+    const url = 'https://www.googleapis.com/calendar/v3/users/me/calendarList/primary';
+    await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        notificationSettings: {
+          notifications: [
+            { type: 'eventCreation', method: 'email' },
+            { type: 'eventCancellation', method: 'email' }
+          ]
+        }
+      })
+    });
+  } catch (err) {
+    // Non-blocking background call
   }
 }
 
