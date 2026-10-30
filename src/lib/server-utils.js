@@ -1339,12 +1339,50 @@ export async function sendWorkflowEmail({ type = 'confirmation', meeting = {}, h
       const secure = getEnv('SMTP_SECURE') === 'true' || port === 465;
       const fromAddr = getEnv('SMTP_FROM') || `"Reuniones" <${smtpUser}>`;
 
-      const transporter = nodemailer.createTransport({
-        host,
-        port,
-        secure,
-        auth: { user: smtpUser, pass: smtpPass }
-      });
+      const isGmail = host.toLowerCase().includes('gmail') || smtpUser.toLowerCase().includes('@gmail.com') || !!getEnv('GMAIL_APP_PASSWORD');
+      const refreshToken = getEnv('GMAIL_REFRESH_TOKEN') || getEnv('GOOGLE_REFRESH_TOKEN');
+      const clientId = getEnv('GOOGLE_CLIENT_ID');
+      const clientSecret = getEnv('GOOGLE_CLIENT_SECRET');
+
+      let transportConfig;
+      if (isGmail && clientId && clientSecret && refreshToken) {
+        // Modo Google OAuth2 (XOAuth2 para Gmail - sin contraseñas)
+        transportConfig = {
+          service: 'gmail',
+          auth: {
+            type: 'OAuth2',
+            user: smtpUser,
+            clientId,
+            clientSecret,
+            refreshToken
+          }
+        };
+      } else if (isGmail) {
+        // Modo Gmail con Contraseña de Aplicación de 16 caracteres
+        transportConfig = {
+          service: 'gmail',
+          auth: {
+            user: smtpUser,
+            pass: smtpPass
+          }
+        };
+      } else {
+        // Modo SMTP Genérico (Host, Port, Secure personalizados)
+        transportConfig = {
+          host,
+          port,
+          secure,
+          auth: {
+            user: smtpUser,
+            pass: smtpPass
+          },
+          tls: {
+            rejectUnauthorized: false
+          }
+        };
+      }
+
+      const transporter = nodemailer.createTransport(transportConfig);
 
       const sendResults = [];
       for (const target of recipients) {
