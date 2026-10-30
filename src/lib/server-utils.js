@@ -856,8 +856,14 @@ export async function createGoogleCalendarEvent(accessToken, refreshToken = null
     if (meeting.inviteeEmail && meeting.inviteeEmail.includes('@')) {
       attendees.push({
         email: meeting.inviteeEmail.trim(),
-        displayName: meeting.inviteeName || 'Invitado',
-        responseStatus: 'needsAction'
+        displayName: meeting.inviteeName || 'Invitado'
+      });
+    }
+
+    if (hostEmail && hostEmail.includes('@') && hostEmail.toLowerCase().trim() !== (meeting.inviteeEmail || '').toLowerCase().trim()) {
+      attendees.push({
+        email: hostEmail.trim(),
+        displayName: hostName || 'Anfitrión'
       });
     }
 
@@ -866,7 +872,7 @@ export async function createGoogleCalendarEvent(accessToken, refreshToken = null
       const extraGuests = String(meeting.guests).split(/[,;\s]+/).map(g => g.trim()).filter(g => g.includes('@'));
       for (const g of extraGuests) {
         if (!attendees.some(a => a.email.toLowerCase() === g.toLowerCase())) {
-          attendees.push({ email: g, responseStatus: 'needsAction' });
+          attendees.push({ email: g });
         }
       }
     }
@@ -959,6 +965,13 @@ export async function createGoogleCalendarEvent(accessToken, refreshToken = null
         query = 'sendUpdates=all';
         payload = baseEventBody;
         usedSendUpdates = 'all';
+      } else if (mode === 'invitee_only') {
+        query = 'sendUpdates=all';
+        payload = {
+          ...baseEventBody,
+          attendees: meeting.inviteeEmail ? [{ email: meeting.inviteeEmail.trim(), displayName: meeting.inviteeName || 'Invitado' }] : []
+        };
+        usedSendUpdates = 'all';
       } else if (mode === 'external_only') {
         query = 'sendUpdates=externalOnly';
         payload = baseEventBody;
@@ -992,6 +1005,11 @@ export async function createGoogleCalendarEvent(accessToken, refreshToken = null
     // If conferenceData creation fails (common on non-Workspace accounts), retry preserving attendees and sendUpdates=all
     if (!response.ok && (response.status === 400 || response.status === 403)) {
       response = await postEvent(currentToken, 'no_conference');
+    }
+
+    // If an account rejects host in attendees, retry with invitee only + sendUpdates=all
+    if (!response.ok && (response.status === 400 || response.status === 403)) {
+      response = await postEvent(currentToken, 'invitee_only');
     }
 
     // If sendUpdates=all is restricted by the account/consent screen, try sendUpdates=externalOnly with attendees
