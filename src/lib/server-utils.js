@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
+import nodemailer from 'nodemailer';
 
 const STORAGE_DIR = os.tmpdir();
 const SYNC_FILE = path.join(STORAGE_DIR, 'google-calendar-sync.json');
@@ -855,14 +856,19 @@ export async function createGoogleCalendarEvent(accessToken, refreshToken = null
     if (meeting.inviteeEmail && meeting.inviteeEmail.includes('@')) {
       attendees.push({
         email: meeting.inviteeEmail.trim(),
-        displayName: meeting.inviteeName || 'Invitado'
+        displayName: meeting.inviteeName || 'Invitado',
+        responseStatus: 'needsAction'
       });
     }
-    if (hostEmail && hostEmail.includes('@') && hostEmail.toLowerCase().trim() !== (meeting.inviteeEmail || '').toLowerCase().trim()) {
-      attendees.push({
-        email: hostEmail.trim(),
-        displayName: hostName || 'Anfitrión'
-      });
+
+    // Include any additional guest emails if present
+    if (meeting.guests) {
+      const extraGuests = String(meeting.guests).split(/[,;\s]+/).map(g => g.trim()).filter(g => g.includes('@'));
+      for (const g of extraGuests) {
+        if (!attendees.some(a => a.email.toLowerCase() === g.toLowerCase())) {
+          attendees.push({ email: g, responseStatus: 'needsAction' });
+        }
+      }
     }
 
     const descriptionLines = [
@@ -942,16 +948,25 @@ export async function createGoogleCalendarEvent(accessToken, refreshToken = null
     };
 
     let currentToken = accessToken;
+    let usedSendUpdates = 'all';
 
     const postEvent = async (token, mode = 'full') => {
       let query = 'conferenceDataVersion=1&sendUpdates=all';
       let payload = eventBodyWithMeet;
+      usedSendUpdates = 'all';
+
       if (mode === 'no_conference') {
         query = 'sendUpdates=all';
         payload = baseEventBody;
+        usedSendUpdates = 'all';
+      } else if (mode === 'external_only') {
+        query = 'sendUpdates=externalOnly';
+        payload = baseEventBody;
+        usedSendUpdates = 'externalOnly';
       } else if (mode === 'basic') {
         query = 'sendUpdates=none';
         payload = baseEventBodyNoAttendees;
+        usedSendUpdates = 'none';
       }
       const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?${query}`;
       return fetch(url, {
@@ -974,12 +989,17 @@ export async function createGoogleCalendarEvent(accessToken, refreshToken = null
       }
     }
 
-    // If conferenceData creation is rejected by the account type, retry without conferenceData
+    // If conferenceData creation fails (common on non-Workspace accounts), retry preserving attendees and sendUpdates=all
     if (!response.ok && (response.status === 400 || response.status === 403)) {
       response = await postEvent(currentToken, 'no_conference');
     }
 
-    // If attendees/sendUpdates=all is restricted on the account, retry basic event creation
+    // If sendUpdates=all is restricted by the account/consent screen, try sendUpdates=externalOnly with attendees
+    if (!response.ok && (response.status === 400 || response.status === 403)) {
+      response = await postEvent(currentToken, 'external_only');
+    }
+
+    // Only if Google rejects attendee insertion completely, fall back to basic
     if (!response.ok && (response.status === 400 || response.status === 403)) {
       response = await postEvent(currentToken, 'basic');
     }
@@ -1149,4 +1169,284 @@ export function generateIcsFeed(meetings = []) {
     vevents,
     'END:VCALENDAR'
   ].join('\r\n');
+}
+
+export function generateSingleIcs(meeting = {}, hostName = 'Anfitrión', hostEmail = null, status = 'CONFIRMED', method = 'REQUEST') {
+  const pad = (n) => String(n).padStart(2, '0');
+  const toIcsDate = (d) => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`;
+  const startObj = new Date(meeting.dateTime || Date.now());
+  const durationMs = (Number(meeting.duration) || 30) * 60000;
+  const endObj = new Date(startObj.getTime() + durationMs);
+
+  const uid = `${meeting.id || Date.now()}@reuniones.io`;
+  const summary = `${meeting.eventTitle || 'Reunión'} con ${meeting.inviteeName || 'Invitado'}`;
+  const description = `Reunión programada vía Reuniones\\nAnfitrión: ${hostName}\\nInvitado: ${meeting.inviteeName || ''} (${meeting.inviteeEmail || ''})\\nEnlace: ${meeting.locationUrl || meeting.location || 'Google Meet'}`;
+  const location = meeting.locationUrl || meeting.location || 'Google Meet';
+
+  const organizerLine = hostEmail ? `ORGANIZER;CN=${hostName}:mailto:${hostEmail}` : `ORGANIZER;CN=${hostName}:mailto:no-reply@reuniones.app`;
+  const attendeeLine = meeting.inviteeEmail ? `ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;CN=${meeting.inviteeName || 'Invitado'}:mailto:${meeting.inviteeEmail}` : '';
+
+  return [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Reuniones Calendly Clone//ES',
+    'CALSCALE:GREGORIAN',
+    `METHOD:${method}`,
+    'BEGIN:VEVENT',
+    `UID:${uid}`,
+    `DTSTAMP:${toIcsDate(new Date())}`,
+    `DTSTART:${toIcsDate(startObj)}`,
+    `DTEND:${toIcsDate(endObj)}`,
+    `SUMMARY:${summary}`,
+    `DESCRIPTION:${description}`,
+    `LOCATION:${location}`,
+    `STATUS:${status}`,
+    organizerLine,
+    attendeeLine,
+    'END:VEVENT',
+    'END:VCALENDAR'
+  ].filter(Boolean).join('\r\n');
+}
+
+export async function sendWorkflowEmail({ type = 'confirmation', meeting = {}, hostName = 'Anfitrión', hostEmail = null, reason = '' }) {
+  if (!meeting || !meeting.inviteeEmail) {
+    return { ok: false, error: 'Correo de invitado no proporcionado' };
+  }
+
+  const isConfirmation = type === 'confirmation' || type === 'booking_created';
+  const subjectPrefix = isConfirmation ? '✓ Confirmado:' : '✕ Cancelado:';
+  const subject = `${subjectPrefix} ${meeting.eventTitle || 'Reunión'} con ${hostName}`;
+
+  const meetLink = meeting.locationUrl || 'https://meet.google.com/new';
+  const meetingDateStr = meeting.dateTime ? new Date(meeting.dateTime).toLocaleString('es-ES', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }) : 'Fecha no especificada';
+
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc; padding: 24px; color: #1e293b;">
+      <div style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+        <div style="background: ${isConfirmation ? '#006bff' : '#e11d48'}; padding: 20px 24px; color: #ffffff;">
+          <h2 style="margin: 0; font-size: 1.25rem;">${isConfirmation ? '¡Tu reunión está programada!' : 'Reunión cancelada'}</h2>
+        </div>
+        <div style="padding: 24px;">
+          <p style="font-size: 1rem; margin-top: 0;">Hola <strong>${meeting.inviteeName || 'Invitado'}</strong>,</p>
+          <p style="font-size: 0.95rem; color: #475569;">
+            ${isConfirmation
+              ? `Tu cita con <strong>${hostName}</strong> ha sido confirmada y agendada.`
+              : `La cita con <strong>${hostName}</strong> ha sido cancelada y el horario ha sido liberado.`
+            }
+          </p>
+
+          <div style="background: #f1f5f9; border-radius: 8px; padding: 16px 20px; margin: 20px 0;">
+            <div style="font-size: 1.1rem; font-weight: 700; color: #0f172a; margin-bottom: 8px;">${meeting.eventTitle || 'Reunión'}</div>
+            <div style="font-size: 0.9rem; color: #334155; margin-bottom: 6px;">📅 <strong>Fecha:</strong> ${meetingDateStr}</div>
+            <div style="font-size: 0.9rem; color: #334155; margin-bottom: 6px;">⏱️ <strong>Duración:</strong> ${meeting.duration || 30} minutos</div>
+            <div style="font-size: 0.9rem; color: #334155; margin-bottom: 6px;">👤 <strong>Anfitrión:</strong> ${hostName} ${hostEmail ? `(${hostEmail})` : ''}</div>
+            ${meeting.inviteeNotes ? `<div style="font-size: 0.85rem; color: #64748b; margin-top: 8px;">📝 <strong>Notas:</strong> ${meeting.inviteeNotes}</div>` : ''}
+          </div>
+
+          ${isConfirmation ? `
+            <div style="text-align: center; margin: 28px 0;">
+              <a href="${meetLink}" target="_blank" style="background: #006bff; color: #ffffff; text-decoration: none; font-weight: 600; padding: 12px 24px; border-radius: 8px; display: inline-block; font-size: 0.95rem;">
+                Unirse con Google Meet
+              </a>
+              <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 8px;">Enlace: <a href="${meetLink}" style="color: #006bff;">${meetLink}</a></div>
+            </div>
+          ` : ''}
+
+          <p style="font-size: 0.85rem; color: #94a3b8; border-top: 1px solid #f1f5f9; padding-top: 16px; margin-bottom: 0;">
+            Se ha adjuntado una invitación de calendario (.ics) compatible con Google Calendar, Apple Mail y Outlook.
+          </p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  const icsData = generateSingleIcs(
+    meeting,
+    hostName,
+    hostEmail,
+    isConfirmation ? 'CONFIRMED' : 'CANCELLED',
+    isConfirmation ? 'REQUEST' : 'CANCEL'
+  );
+
+  const recipients = [meeting.inviteeEmail];
+  if (hostEmail && hostEmail.includes('@') && hostEmail.toLowerCase() !== meeting.inviteeEmail.toLowerCase()) {
+    recipients.push(hostEmail);
+  }
+
+  // 1. Try Resend API if RESEND_API_KEY is configured
+  const resendApiKey = getEnv('RESEND_API_KEY');
+  if (resendApiKey) {
+    try {
+      const fromAddr = getEnv('EMAIL_FROM') || 'Reuniones <onboarding@resend.dev>';
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          from: fromAddr,
+          to: recipients,
+          subject,
+          html: htmlContent,
+          attachments: [
+            {
+              filename: 'reunion.ics',
+              content: Buffer.from(icsData).toString('base64'),
+              content_type: 'text/calendar; method=' + (isConfirmation ? 'REQUEST' : 'CANCEL')
+            }
+          ]
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        return { ok: true, provider: 'resend', id: data.id, recipients };
+      }
+      console.warn('Resend API returned error:', data);
+    } catch (err) {
+      console.warn('Error sending via Resend API:', err.message);
+    }
+  }
+
+  // 2. Try SMTP / Nodemailer (supports Gmail, Outlook, AWS SES, Custom SMTP)
+  const smtpUser = getEnv('SMTP_USER') || getEnv('GMAIL_USER');
+  const smtpPass = getEnv('SMTP_PASS') || getEnv('GMAIL_APP_PASSWORD');
+  if (smtpUser && smtpPass) {
+    try {
+      const host = getEnv('SMTP_HOST') || 'smtp.gmail.com';
+      const port = Number(getEnv('SMTP_PORT')) || 465;
+      const secure = getEnv('SMTP_SECURE') === 'true' || port === 465;
+      const fromAddr = getEnv('SMTP_FROM') || `"Reuniones" <${smtpUser}>`;
+
+      const transporter = nodemailer.createTransport({
+        host,
+        port,
+        secure,
+        auth: { user: smtpUser, pass: smtpPass }
+      });
+
+      const info = await transporter.sendMail({
+        from: fromAddr,
+        to: recipients.join(', '),
+        subject,
+        html: htmlContent,
+        icalEvent: {
+          filename: 'reunion.ics',
+          method: isConfirmation ? 'REQUEST' : 'CANCEL',
+          content: icsData
+        }
+      });
+
+      return { ok: true, provider: 'smtp', messageId: info.messageId, recipients };
+    } catch (err) {
+      console.warn('Error sending via SMTP Nodemailer:', err.message);
+      return { ok: false, error: err.message, provider: 'smtp' };
+    }
+  }
+
+  // 3. Fallback when credentials are not configured yet
+  return {
+    ok: false,
+    configured: false,
+    reason: 'Faltan credenciales en .env (define RESEND_API_KEY o SMTP_USER y SMTP_PASS para envíos de correo reales).',
+    recipients,
+    simulated: true
+  };
+}
+
+export async function sendWorkflowSms({ to, body, meeting = {} }) {
+  const accountSid = getEnv('TWILIO_ACCOUNT_SID');
+  const authToken = getEnv('TWILIO_AUTH_TOKEN');
+  const fromNumber = getEnv('TWILIO_PHONE_NUMBER') || getEnv('TWILIO_FROM');
+
+  if (!accountSid || !authToken || !fromNumber) {
+    return {
+      ok: false,
+      configured: false,
+      reason: 'Faltan credenciales de Twilio en .env (define TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN y TWILIO_PHONE_NUMBER para envíos SMS reales).',
+      simulated: true
+    };
+  }
+
+  if (!to) {
+    return { ok: false, error: 'Número de teléfono destinatario no proporcionado' };
+  }
+
+  try {
+    const authHeader = 'Basic ' + Buffer.from(`${accountSid}:${authToken}`).toString('base64');
+    const endpoint = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(accountSid)}/Messages.json`;
+
+    const formData = new URLSearchParams();
+    formData.append('To', to);
+    formData.append('From', fromNumber);
+    formData.append('Body', body);
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: formData.toString()
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      return { ok: true, provider: 'twilio', sid: data.sid, to };
+    }
+    return { ok: false, error: data.message || `Twilio error HTTP ${res.status}`, provider: 'twilio' };
+  } catch (err) {
+    return { ok: false, error: err.message, provider: 'twilio' };
+  }
+}
+
+export function getWorkflowApiStatus() {
+  const resendApiKey = getEnv('RESEND_API_KEY');
+  const smtpUser = getEnv('SMTP_USER') || getEnv('GMAIL_USER');
+  const smtpPass = getEnv('SMTP_PASS') || getEnv('GMAIL_APP_PASSWORD');
+  const twilioSid = getEnv('TWILIO_ACCOUNT_SID');
+  const twilioToken = getEnv('TWILIO_AUTH_TOKEN');
+  const twilioPhone = getEnv('TWILIO_PHONE_NUMBER') || getEnv('TWILIO_FROM');
+  const googleClientId = getEnv('GOOGLE_CLIENT_ID');
+  const googleSecret = getEnv('GOOGLE_CLIENT_SECRET');
+
+  const emailConfigured = Boolean(resendApiKey || (smtpUser && smtpPass));
+  const emailProvider = resendApiKey ? 'resend' : (smtpUser ? 'smtp' : 'none');
+
+  const smsConfigured = Boolean(twilioSid && twilioToken && twilioPhone);
+  const googleConfigured = Boolean(googleClientId && googleSecret && !googleClientId.includes('tu_google_client_id'));
+
+  return {
+    email: {
+      configured: emailConfigured,
+      provider: emailProvider,
+      details: emailConfigured
+        ? (emailProvider === 'resend' ? 'Conectado mediante Resend API' : `Conectado mediante SMTP (${smtpUser})`)
+        : 'Sin configurar. Define RESEND_API_KEY o credenciales SMTP en .env'
+    },
+    sms: {
+      configured: smsConfigured,
+      provider: smsConfigured ? 'twilio' : 'none',
+      details: smsConfigured
+        ? `Conectado mediante Twilio (${twilioPhone})`
+        : 'Sin configurar. Define TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN y TWILIO_PHONE_NUMBER en .env'
+    },
+    googleCalendar: {
+      configured: googleConfigured,
+      details: googleConfigured
+        ? 'Google Calendar OAuth activo'
+        : 'Sin configurar. Define GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET en .env'
+    }
+  };
 }

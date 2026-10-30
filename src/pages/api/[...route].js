@@ -22,6 +22,9 @@ import {
   createGoogleCalendarEvent,
   deleteGoogleCalendarEvent,
   syncPendingMeetingsToGoogleCalendar,
+  sendWorkflowEmail,
+  sendWorkflowSms,
+  getWorkflowApiStatus,
   generateIcsFeed,
   GOOGLE_AUTH_ENDPOINT,
   GOOGLE_TOKEN_ENDPOINT,
@@ -182,6 +185,7 @@ export const ALL = async (context) => {
     scopeSet.add('email');
     scopeSet.add('profile');
     scopeSet.add('https://www.googleapis.com/auth/calendar.events');
+    scopeSet.add('https://www.googleapis.com/auth/calendar');
     const scopes = Array.from(scopeSet).join(' ');
     const state = crypto.randomBytes(16).toString('hex');
     const loginHint = (url.searchParams.get('login_hint') || '').trim();
@@ -1183,6 +1187,14 @@ export const ALL = async (context) => {
       saveSyncConfig(visitorConfig, visitorUser, visitorSlug);
     }
 
+    // Trigger Email Workflow for Booking Confirmation
+    const emailResult = await sendWorkflowEmail({
+      type: 'confirmation',
+      meeting: enrichedMeeting,
+      hostName: effectiveHostName,
+      hostEmail: effectiveHostEmail
+    });
+
     return jsonResponse({
       success: true,
       meeting: enrichedMeeting,
@@ -1190,6 +1202,7 @@ export const ALL = async (context) => {
       googleEventId,
       googleEventHtmlLink,
       hangoutLink: googleHangoutLink,
+      emailResult,
       warning: googleCalendarError
     }, 200, {}, updatedCookies);
   }
@@ -1281,13 +1294,76 @@ export const ALL = async (context) => {
       }
     }
 
+    // 5. Trigger Email Workflow for Cancellation Notice
+    let emailResult = null;
+    if (foundMeeting) {
+      emailResult = await sendWorkflowEmail({
+        type: 'cancellation',
+        meeting: foundMeeting,
+        hostName: hostConfig?.hostPublicName || user?.name || 'Anfitrión',
+        hostEmail: hostConfig?.hostEmail || user?.email || null
+      });
+    }
+
     return jsonResponse({
       success: true,
       status: deletePermanently ? 'deleted' : 'canceled',
       meetingId,
       freedSlot: true,
       googleEventDeleted,
+      emailResult,
       warning: googleCalendarError
+    }, 200);
+  }
+
+  // --- Workflows: Send Email Endpoint (Direct Trigger) ---
+  if (pathname === '/api/workflows/send-email' && method === 'POST') {
+    const sessionData = getSessionData(request);
+    const user = sessionData?.user || null;
+    const body = await readRequestBody(request);
+    const meeting = body.meeting || {};
+    const type = body.type || 'confirmation';
+    const hostName = body.hostName || user?.name || 'Anfitrión';
+    const hostEmail = body.hostEmail || user?.email || null;
+
+    const emailResult = await sendWorkflowEmail({
+      type,
+      meeting,
+      hostName,
+      hostEmail
+    });
+
+    return jsonResponse({
+      success: emailResult.ok,
+      emailResult
+    }, 200);
+  }
+
+  // --- Workflows: Send SMS Endpoint ---
+  if (pathname === '/api/workflows/send-sms' && method === 'POST') {
+    const body = await readRequestBody(request);
+    const to = (body.to || '').trim();
+    const messageBody = (body.body || body.message || '').trim();
+    const meeting = body.meeting || {};
+
+    const smsResult = await sendWorkflowSms({
+      to,
+      body: messageBody,
+      meeting
+    });
+
+    return jsonResponse({
+      success: smsResult.ok,
+      smsResult
+    }, 200);
+  }
+
+  // --- Workflows: Integration Status (Email, SMS, Calendar) ---
+  if (pathname === '/api/workflows/status' && method === 'GET') {
+    const status = getWorkflowApiStatus();
+    return jsonResponse({
+      success: true,
+      status
     }, 200);
   }
 

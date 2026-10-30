@@ -1963,19 +1963,97 @@
 
       if (triggerEvent === 'booking_created') {
         if (wf.id === 'wf-confirmation-email') {
-          actionDetails = `Correo de confirmación enviado a ${meeting.inviteeEmail} y ${meeting.hostName || 'Anfitrión'} con archivo .ics y link de Meet`;
+          try {
+            const res = await fetch('/api/workflows/send-email', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                type: 'confirmation',
+                meeting,
+                hostName: meeting.hostName || getPublicHostName() || 'Anfitrión'
+              })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (data?.emailResult?.ok) {
+              actionDetails = `✓ Correo de confirmación enviado con éxito a ${meeting.inviteeEmail} (vía ${data.emailResult.provider.toUpperCase()})`;
+              status = 'success';
+            } else if (data?.emailResult?.configured === false) {
+              actionDetails = `ℹ️ Correo simulado (Configura RESEND_API_KEY o credenciales SMTP en .env para envíos reales)`;
+              status = 'simulated';
+            } else {
+              actionDetails = `⚠️ Error enviando correo: ${data?.emailResult?.error || 'Verifica credenciales en .env'}`;
+              status = 'error';
+            }
+          } catch (e) {
+            actionDetails = `Correo registrado con archivo .ics para ${meeting.inviteeEmail}`;
+          }
         } else if (wf.id === 'wf-reminder-24h') {
           status = 'scheduled';
           actionDetails = `Recordatorio por Email programado para enviarse 24 horas antes a ${meeting.inviteeEmail}`;
         } else if (wf.id === 'wf-reminder-1h-sms') {
-          status = 'scheduled';
-          actionDetails = `Recordatorio SMS/WhatsApp programado para 1 hora antes al número ${meeting.inviteePhone}`;
+          if (meeting.inviteePhone) {
+            try {
+              const res = await fetch('/api/workflows/send-sms', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  to: meeting.inviteePhone,
+                  body: `Recordatorio: Tienes una cita de ${meeting.eventTitle || 'Reunión'} con ${meeting.hostName || 'Anfitrión'}. Enlace: ${meeting.locationUrl || 'Google Meet'}`,
+                  meeting
+                })
+              });
+              const data = await res.json().catch(() => ({}));
+              if (data?.smsResult?.ok) {
+                actionDetails = `✓ SMS enviado con éxito a ${meeting.inviteePhone} vía Twilio`;
+                status = 'success';
+              } else if (data?.smsResult?.configured === false) {
+                actionDetails = `ℹ️ SMS simulado a ${meeting.inviteePhone} (Configura credenciales de Twilio en .env para envíos reales)`;
+                status = 'simulated';
+              } else {
+                actionDetails = `⚠️ Error enviando SMS: ${data?.smsResult?.error || 'Revisa configuración de Twilio'}`;
+                status = 'error';
+              }
+            } catch (e) {
+              status = 'scheduled';
+              actionDetails = `Recordatorio SMS/WhatsApp programado para 1 hora antes al número ${meeting.inviteePhone}`;
+            }
+          } else {
+            status = 'skipped';
+            actionDetails = 'Omitido: El invitado no proporcionó número de teléfono para SMS';
+          }
         } else {
           actionDetails = `Flujo ${wf.name} ejecutado para la nueva reserva`;
         }
       } else {
         // Canceled or deleted
-        actionDetails = `Aviso inmediato de cancelación enviado a ${meeting.inviteeEmail} y ${meeting.hostName || 'Anfitrión'}. Horario liberado en agenda`;
+        if (wf.id === 'wf-cancellation-email') {
+          try {
+            const res = await fetch('/api/workflows/send-email', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                type: 'cancellation',
+                meeting,
+                hostName: meeting.hostName || getPublicHostName() || 'Anfitrión'
+              })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (data?.emailResult?.ok) {
+              actionDetails = `✓ Aviso de cancelación enviado con éxito por correo a ${meeting.inviteeEmail} (vía ${data.emailResult.provider.toUpperCase()})`;
+              status = 'success';
+            } else if (data?.emailResult?.configured === false) {
+              actionDetails = `ℹ️ Aviso de cancelación simulado (Configura credenciales de Email en .env para entrega real)`;
+              status = 'simulated';
+            } else {
+              actionDetails = `⚠️ Error al enviar cancelación: ${data?.emailResult?.error || 'Revisa .env'}`;
+              status = 'error';
+            }
+          } catch (e) {
+            actionDetails = `Aviso de cancelación registrado y horario liberado para ${meeting.inviteeEmail}`;
+          }
+        } else {
+          actionDetails = `Flujo ejecutado: Reunión cancelada y horario liberado en agenda`;
+        }
       }
 
       const logEntry = {
@@ -2022,7 +2100,64 @@
     }
   }
 
+  async function renderWorkflowApiStatus() {
+    const banner = document.getElementById('workflows-api-status-banner');
+    if (!banner) return;
+
+    try {
+      const res = await fetch('/api/workflows/status');
+      const data = await res.json();
+      const s = data?.status || {};
+
+      const emailOk = s.email?.configured;
+      const smsOk = s.sms?.configured;
+      const gcalOk = s.googleCalendar?.configured;
+
+      banner.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 24px; flex-wrap: wrap;">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <div style="width: 36px; height: 36px; border-radius: 8px; background: ${emailOk ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)'}; display: flex; align-items: center; justify-content: center; font-size: 1.15rem;">📧</div>
+            <div>
+              <div style="font-weight: 700; font-size: 0.875rem; color: var(--text-main);">API de Email (Nodemailer / Resend)</div>
+              <div style="font-size: 0.75rem; font-weight: 600; color: ${emailOk ? 'var(--accent-emerald)' : 'var(--accent-amber)'};">
+                ${emailOk ? `✓ Conectado (${s.email.provider.toUpperCase()})` : '⚠️ Modo Simulación (Faltan claves en .env)'}
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <div style="width: 36px; height: 36px; border-radius: 8px; background: ${smsOk ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)'}; display: flex; align-items: center; justify-content: center; font-size: 1.15rem;">📱</div>
+            <div>
+              <div style="font-weight: 700; font-size: 0.875rem; color: var(--text-main);">API de SMS (Twilio)</div>
+              <div style="font-size: 0.75rem; font-weight: 600; color: ${smsOk ? 'var(--accent-emerald)' : 'var(--accent-amber)'};">
+                ${smsOk ? '✓ Conectado (Twilio)' : '⚠️ Modo Simulación (Faltan claves en .env)'}
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <div style="width: 36px; height: 36px; border-radius: 8px; background: ${gcalOk ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)'}; display: flex; align-items: center; justify-content: center; font-size: 1.15rem;">📅</div>
+            <div>
+              <div style="font-weight: 700; font-size: 0.875rem; color: var(--text-main);">Google Calendar OAuth</div>
+              <div style="font-size: 0.75rem; font-weight: 600; color: ${gcalOk ? 'var(--accent-emerald)' : 'var(--accent-amber)'};">
+                ${gcalOk ? '✓ OAuth Configurado' : '⚠️ Modo Local / Demo'}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style="font-size: 0.8125rem; color: var(--text-muted); display: flex; align-items: center; gap: 8px;">
+          <span>💡 Edita tu archivo <code>.env</code> para habilitar envíos reales.</span>
+        </div>
+      `;
+    } catch (e) {
+      console.warn('Error fetching workflow api status:', e);
+    }
+  }
+
   function renderWorkflows() {
+    renderWorkflowApiStatus();
+
     const grid = document.getElementById('workflows-grid');
     if (grid) {
       grid.innerHTML = state.workflows.map(wf => `

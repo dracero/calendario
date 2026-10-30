@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { fetchGoogleCalendarApiEvents } from './server-utils.js';
+import { fetchGoogleCalendarApiEvents, createGoogleCalendarEvent, deleteGoogleCalendarEvent, sendWorkflowEmail, sendWorkflowSms, getWorkflowApiStatus } from './server-utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -953,17 +953,49 @@ export default async function handler(req, res) {
     saveMeetings(meetings);
 
     const config = loadSyncConfig();
+    let googleEventCreated = false;
+    let googleEventId = null;
+    let googleEventHtmlLink = null;
+    let googleHangoutLink = null;
+
+    if (config.googleAccessToken && !String(config.googleAccessToken).startsWith('demo_token_')) {
+      const gRes = await createGoogleCalendarEvent(
+        config.googleAccessToken,
+        config.googleRefreshToken || null,
+        rawMeeting,
+        config.hostPublicName || 'Anfitrión',
+        config.hostEmail || null
+      );
+      if (gRes.newAccessToken) {
+        config.googleAccessToken = gRes.newAccessToken;
+      }
+      if (gRes.ok) {
+        googleEventCreated = true;
+        googleEventId = gRes.eventId || null;
+        googleEventHtmlLink = gRes.htmlLink || null;
+        googleHangoutLink = gRes.hangoutLink || null;
+      }
+    }
+
     const durationMs = (Number(enrichedMeeting.duration) || 30) * 60000;
     const startObj = new Date(enrichedMeeting.dateTime);
     const endObj = new Date(startObj.getTime() + durationMs);
     const busyEvent = {
       id: enrichedMeeting.id,
+      googleEventId: googleEventId || null,
       summary: `${enrichedMeeting.eventTitle || 'Reunión'} con ${enrichedMeeting.inviteeName || 'Invitado'}`,
       start: startObj.toISOString(),
       end: endObj.toISOString(),
-      location: enrichedMeeting.locationUrl || enrichedMeeting.location || 'Google Meet',
+      location: googleHangoutLink || enrichedMeeting.locationUrl || enrichedMeeting.location || 'Google Meet',
       status: 'CONFIRMED'
     };
+
+    enrichedMeeting.googleEventId = googleEventId;
+    enrichedMeeting.googleEventHtmlLink = googleEventHtmlLink;
+    enrichedMeeting.googleEventCreated = googleEventCreated;
+    if (googleHangoutLink) {
+      enrichedMeeting.locationUrl = googleHangoutLink;
+    }
 
     config.events = Array.isArray(config.events) ? config.events : [];
     if (!config.events.some(ev => ev.id === busyEvent.id)) {
@@ -972,10 +1004,19 @@ export default async function handler(req, res) {
     config.lastSync = new Date().toISOString();
     saveSyncConfig(config);
 
+    const emailResult = await sendWorkflowEmail({
+      type: 'confirmation',
+      meeting: enrichedMeeting,
+      hostName: config.hostPublicName || 'Anfitrión',
+      hostEmail: config.hostEmail || null
+    });
+
     sendJson(res, 200, {
       success: true,
       meeting: enrichedMeeting,
-      googleEventCreated: false
+      googleEventCreated,
+      googleEventId,
+      emailResult
     });
     return;
   }
@@ -1005,17 +1046,97 @@ export default async function handler(req, res) {
     }
 
     const config = loadSyncConfig();
+    let googleEventDeleted = false;
+    const gEventId = foundMeeting?.googleEventId || (config?.events?.find(ev => ev.id === meetingId)?.googleEventId);
+    if (gEventId && config.googleAccessToken && !String(config.googleAccessToken).startsWith('demo_token_')) {
+      const delRes = await deleteGoogleCalendarEvent(
+        config.googleAccessToken,
+        config.googleRefreshToken || null,
+        gEventId
+      );
+      if (delRes.newAccessToken) {
+        config.googleAccessToken = delRes.newAccessToken;
+      }
+      if (delRes.ok) {
+        googleEventDeleted = true;
+      }
+    }
+
     if (config && Array.isArray(config.events)) {
       config.events = config.events.filter(ev => ev.id !== meetingId);
       config.lastSync = new Date().toISOString();
       saveSyncConfig(config);
     }
 
+    let emailResult = null;
+    if (foundMeeting) {
+      emailResult = await sendWorkflowEmail({
+        type: 'cancellation',
+        meeting: foundMeeting,
+        hostName: config?.hostPublicName || 'Anfitrión',
+        hostEmail: config?.hostEmail || null
+      });
+    }
+
     sendJson(res, 200, {
       success: true,
       status: deletePermanently ? 'deleted' : 'canceled',
       meetingId,
-      freedSlot: true
+      freedSlot: true,
+      googleEventDeleted,
+      emailResult
+    });
+    return;
+  }
+
+  // --- Workflows: Send Email ---
+  if (pathname === '/api/workflows/send-email' && req.method === 'POST') {
+    const body = await readBody(req);
+    const meeting = body.meeting || {};
+    const type = body.type || 'confirmation';
+    const hostName = body.hostName || 'Anfitrión';
+    const hostEmail = body.hostEmail || null;
+
+    const emailResult = await sendWorkflowEmail({
+      type,
+      meeting,
+      hostName,
+      hostEmail
+    });
+
+    sendJson(res, 200, {
+      success: emailResult.ok,
+      emailResult
+    });
+    return;
+  }
+
+  // --- Workflows: Send SMS ---
+  if (pathname === '/api/workflows/send-sms' && req.method === 'POST') {
+    const body = await readBody(req);
+    const to = (body.to || '').trim();
+    const messageBody = (body.body || body.message || '').trim();
+    const meeting = body.meeting || {};
+
+    const smsResult = await sendWorkflowSms({
+      to,
+      body: messageBody,
+      meeting
+    });
+
+    sendJson(res, 200, {
+      success: smsResult.ok,
+      smsResult
+    });
+    return;
+  }
+
+  // --- Workflows: Integration Status ---
+  if (pathname === '/api/workflows/status' && req.method === 'GET') {
+    const status = getWorkflowApiStatus();
+    sendJson(res, 200, {
+      success: true,
+      status
     });
     return;
   }
